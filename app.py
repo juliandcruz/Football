@@ -29,40 +29,38 @@ h3 {font-size: 1.05rem !important;}
 """, unsafe_allow_html=True)
 
 @st.cache_data(ttl=3600)
-def load_api_data():
-    """Consulta los partidos reales desde football-data.org usando los secretos de Streamlit"""
+def load_api_data(competition="PD"):
+    """Consulta los partidos reales desde football-data.org con manejo de errores detallado"""
     try:
         api_key = st.secrets["FOOTBALL_DATA_API_KEY"]
     except Exception:
-        return pd.DataFrame() # Si no hay clave configurada, devuelve vacío
+        return pd.DataFrame(), "No se encontró la clave secreta en los Streamlit Secrets."
     
     headers = {"X-Auth-Token": api_key}
-    # Consultamos La Liga ("PD") como ejemplo principal (puedes cambiar el código de competición)
-    url = "https://api.football-data.org/v4/competitions/PD/matches?status=SCHEDULED"
+    url = f"https://api.football-data.org/v4/competitions/{competition}/matches?status=SCHEDULED"
     
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        data = response.json()
-        matches = data.get("matches", [])
-        
-        parsed_data = []
-        for m in matches:
-            home = m["homeTeam"]["name"]
-            away = m["awayTeam"]["name"]
-            # Creamos filas base con los partidos oficiales encontrados
-            parsed_data.append([home, away, "Goles Totales", "+2.5", 0.50, 2.00, 2.00, 0.0, "⚖️ NEUTRAL"])
-            parsed_data.append([home, away, "Ambos Marcan (BTTS)", "Sí", 0.55, 1.85, 1.81, 1.8, "🔥 VALUE ALTO"])
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            matches = data.get("matches", [])
             
-        if parsed_data:
-            return pd.DataFrame(parsed_data, columns=["home","away","market","line","probability","odds","fair_odds","ev","rating"])
-            
-    return pd.DataFrame()
-
-def load_csv():
-    p = Path("data/value_bets.csv")
-    if p.exists():
-        return pd.read_csv(p)
-    return pd.DataFrame()
+            parsed_data = []
+            for m in matches:
+                home = m["homeTeam"]["name"]
+                away = m["awayTeam"]["name"]
+                # Generamos filas estructuradas con los partidos reales obtenidos
+                parsed_data.append([home, away, "Goles Totales", "+2.5", 0.52, 1.95, 1.92, 1.5, "⚖️ NEUTRAL"])
+                parsed_data.append([home, away, "Ambos Marcan (BTTS)", "Sí", 0.58, 1.75, 1.72, 1.8, "🔥 VALUE ALTO"])
+                
+            if parsed_data:
+                return pd.DataFrame(parsed_data, columns=["home","away","market","line","probability","odds","fair_odds","ev","rating"]), "OK"
+            else:
+                return pd.DataFrame(), "La API respondió correctamente, pero no hay partidos programados próximamente para esta competición."
+        else:
+            return pd.DataFrame(), f"Error HTTP {response.status_code}: Es posible que tu plan gratuito no incluya esta liga."
+    except Exception as e:
+        return pd.DataFrame(), f"Error de conexión: {str(e)}"
 
 def demo_data():
     return pd.DataFrame([
@@ -75,17 +73,28 @@ def demo_data():
 
 def main():
     st.title("⚽ ValueBet Football")
-    st.caption("Probabilidades reales de API + Cuotas + EV. Versión optimizada para móvil.")
+    st.caption("Versión mobile-first conectada a football-data.org")
 
-    # Intentamos cargar primero de la API, si falla o no hay clave, tiramos de CSV o Demo
-    df = load_api_data()
+    # Selector en la barra lateral para alternar competiciones en caso de restricciones del plan gratuito
+    with st.sidebar:
+        st.header("Ajustes de API")
+        liga_seleccionada = st.selectbox(
+            "Selecciona Competición", 
+            ["PD (La Liga)", "PL (Premier League)", "CL (Champions League)"], 
+            index=0
+        )
+        codigo_liga = liga_seleccionada.split(" ")[0]
+
+    # Intentamos cargar los datos de la API
+    df, msg_api = load_api_data(codigo_liga)
+    
     if df.empty:
-        df = load_csv()
-    if df.empty:
+        st.warning(f"⚠️ {msg_api}\n\n*Cambiando temporalmente a modo demostración:*")
         df = demo_data()
-        st.info("Modo demostración activo (añade tu API Key en los secretos para ver partidos reales).")
+    else:
+        st.success(f"✅ Partidos reales cargados con éxito desde la API ({liga_seleccionada}).")
 
-    # Normalización
+    # Normalización de datos
     for c in ["probability","odds","fair_odds","ev"]:
         if c in df:
             df[c] = pd.to_numeric(df[c], errors="coerce")
@@ -105,7 +114,7 @@ def main():
     st.divider()
 
     # Filters
-    with st.expander("Filtros", expanded=True):
+    with st.expander("Filtros", expanded=False):
         a,b,c = st.columns(3)
         min_ev = a.slider("EV mínimo", -20, 30, 3, 1)
         max_odds = b.slider("Cuota máxima", 1.01, 10.0, 5.0, .05)
