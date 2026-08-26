@@ -171,14 +171,12 @@ def main():
     with tab_top:
         st.caption(f"{competitions[liga_seleccionada]['emblem']} Selecciona una fecha para ver las mejores oportunidades del día con probabilidad > 45%")
         
-        # Selector interactivo de fecha (por defecto hoy, permite ver mañana u otros días)
         col_date, col_info = st.columns([2, 3])
         with col_date:
             selected_date = st.date_input("Consultar pronósticos para la fecha:", value=datetime.now().date())
         
         selected_date_str = selected_date.strftime("%d/%m")
         
-        # Filtrar por la fecha seleccionada
         day_df = df[df["date_obj"] == selected_date]
         top_df = day_df[day_df["ev"] >= (min_ev / 100.0)].sort_values("ev", ascending=False)
         
@@ -255,7 +253,7 @@ def main():
 
     with tab_sim:
         st.caption("Cálculo de stake recomendado mediante Criterio de Kelly.")
-        bank = st.number_input("Bankroll actual (€)", min_value=10.0, value=500.0, step50.0)
+        bank = st.number_input("Bankroll actual (€)", min_value=10.0, value=500.0, step=50.0)
         frac = st.slider("Criterio Kelly fraccionado", 0.05, 0.50, 0.25, 0.05)
         
         if not df.empty:
@@ -269,7 +267,7 @@ def main():
             st.success(f"Sugerencia para la mejor oportunidad ({s.home} vs {s.away}): **€{stake:.2f}** ({stake/bank*100:.1f}% de tu bank).")
 
     st.divider()
-    st.caption("ValueBet Football Pro V6.2 — Interactive Date Picker")
+    st.caption("ValueBet Football Pro V6.3 — Fixed & Optimized")
 
 if __name__ == "__main__":
     main()
