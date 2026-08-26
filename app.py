@@ -164,14 +164,18 @@ def main():
 
     df["probability_pct"] = df["probability"] * 100
 
-    tab_top, tab_matches, tab_sim = st.tabs(["🔥 Top Value", "📅 Partidos y Mercados", "💰 Simulador"])
+    tab_top, tab_matches, tab_sim = st.tabs(["🔥 Top Value (Hoy)", "📅 Partidos y Mercados", "💰 Simulador"])
 
     with tab_top:
-        st.caption(f"{competitions[liga_seleccionada]['emblem']} Oportunidades con probabilidad > 45% en {liga_seleccionada}")
-        top_df = df[df["ev"] >= (min_ev / 100.0)].sort_values("ev", ascending=False)
+        hoy_str = datetime.now().strftime("%d/%m")
+        st.caption(f"{competitions[liga_seleccionada]['emblem']} Oportunidades exclusivas para hoy ({hoy_str}) con probabilidad > 45%")
+        
+        # FILTRO EXCLUSIVO PARA PARTIDOS DE HOY
+        today_df = df[df["date"] == hoy_str]
+        top_df = today_df[today_df["ev"] >= (min_ev / 100.0)].sort_values("ev", ascending=False)
         
         if top_df.empty:
-            st.info("No hay apuestas que cumplan el filtro de EV mínimo.")
+            st.info(f"No hay pronósticos con valor mínimo para partidos programados estrictamente para hoy ({hoy_str}). Revisa la pestaña de Partidos y Mercados para ver fechas futuras.")
         else:
             for _, r in top_df.head(10).iterrows():
                 ev_p = float(r.ev) * 100
@@ -208,7 +212,6 @@ def main():
             h_img = f'<img src="{h_crest}" width="22" style="vertical-align:middle;margin-right:8px;">' if h_crest else ''
             a_img = f'<img src="{a_crest}" width="22" style="vertical-align:middle;margin-right:8px;">' if a_crest else ''
             
-            # Etiqueta visual del número de mercados analizados para este partido
             num_mercados = len(subset)
             
             with st.expander(f"📌 {m_date} ({m_time})  |  {h} vs {a}  ({num_mercados} mercados)", expanded=False):
@@ -257,7 +260,7 @@ def main():
             st.success(f"Sugerencia para la mejor oportunidad ({s.home} vs {s.away}): **€{stake:.2f}** ({stake/bank*100:.1f}% de tu bank).")
 
     st.divider()
-    st.caption("ValueBet Football Pro V6.0 — Visual UI Redesign")
+    st.caption("ValueBet Football Pro V6.1 — Daily Filter Applied")
 
 if __name__ == "__main__":
     main()
