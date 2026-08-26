@@ -33,7 +33,6 @@ h2 {font-size: 1.25rem !important; margin-top: 1rem !important;}
 
 # Función general de Poisson para mercados (goles, córners, tarjetas, etc.)
 def poisson_prob_over(expected_value, line):
-    # Cálculo aproximado de probabilidad acumulada para líneas de Over
     prob_under = 0
     for k in range(int(math.floor(line)) + 1):
         prob_under += (math.exp(-expected_value) * (expected_value**k)) / math.factorial(k)
@@ -92,29 +91,27 @@ def load_multimarket_data(competition="PD"):
             h_stat = team_stats.get(home, {"gf": league_avg_goals, "ga": league_avg_goals})
             a_stat = team_stats.get(away, {"gf": league_avg_goals, "ga": league_avg_goals})
             
-            # 1. MERCADO: GOLES (+2.5)
+            # Cálculos de mercados
             home_exp_g = (h_stat["gf"] + a_stat["ga"]) / 2
             away_exp_g = (a_stat["gf"] + h_stat["ga"]) / 2
+            
             prob_goals = poisson_prob_over(home_exp_g + away_exp_g, 2.5)
             fair_g = 1 / prob_goals
             odds_g = round(fair_g * np.random.uniform(0.96, 1.12), 2)
             ev_g = (prob_goals * odds_g) - 1
             
-            # 2. MERCADO: CÓRNERS (+9.5) - Estimación estadística basada en volumen ofensivo
             exp_corners = 9.2 + (home_exp_g - 1.2) * 1.5 + (away_exp_g - 1.2) * 1.0
             prob_corners = poisson_prob_over(exp_corners, 9.5)
             fair_c = 1 / prob_corners
             odds_c = round(fair_c * np.random.uniform(0.95, 1.14), 2)
             ev_c = (prob_corners * odds_c) - 1
 
-            # 3. MERCADO: TARJETAS AMARILLAS (+4.5)
             exp_cards = 4.6
             prob_cards = poisson_prob_over(exp_cards, 4.5)
             fair_cards = 1 / prob_cards
             odds_cards = round(fair_cards * np.random.uniform(0.97, 1.12), 2)
             ev_cards = (prob_cards * odds_cards) - 1
 
-            # 4. MERCADO: DISPAROS A PUERTA (+8.5)
             exp_shots = 8.8 + (home_exp_g + away_exp_g) * 1.2
             prob_shots = poisson_prob_over(exp_shots, 8.5)
             fair_shots = 1 / prob_shots
@@ -129,16 +126,18 @@ def load_multimarket_data(competition="PD"):
             ]
 
             for mkt, line, prob, odds, fair, ev in markets:
-                rating = "🔥 VALUE ALTO" if ev > 0.04 else ("⚖️ NEUTRAL" if ev > -0.05 else "🔴 PASAR")
-                parsed_data.append([
-                    home, away, home_crest, away_crest, match_date, match_time,
-                    mkt, line, prob, odds, fair, ev, rating
-                ])
+                # FILTRO ESTRICTO: Solo añadimos mercados con probabilidad >= 45% (0.45)
+                if prob >= 0.45:
+                    rating = "🔥 VALUE ALTO" if ev > 0.04 else ("⚖️ NEUTRAL" if ev > -0.05 else "🔴 PASAR")
+                    parsed_data.append([
+                        home, away, home_crest, away_crest, match_date, match_time,
+                        mkt, line, prob, odds, fair, ev, rating
+                    ])
             
         if parsed_data:
             return pd.DataFrame(parsed_data, columns=["home","away","home_crest","away_crest","date","time","market","line","probability","odds","fair_odds","ev","rating"]), "OK"
         else:
-            return pd.DataFrame(), "Sin partidos próximos en esta competición."
+            return pd.DataFrame(), "No hay partidos que cumplan el filtro de probabilidad mínima (45%)."
             
     except Exception as e:
         return pd.DataFrame(), str(e)
@@ -172,11 +171,11 @@ def main():
     tab_top, tab_matches, tab_sim = st.tabs(["🔥 Top Value", "📅 Partidos y Mercados", "💰 Simulador"])
 
     with tab_top:
-        st.caption(f"{competitions[liga_seleccionada]['emblem']} Oportunidades multi-mercado en {liga_seleccionada}")
+        st.caption(f"{competitions[liga_seleccionada]['emblem']} Oportunidades con probabilidad > 45% en {liga_seleccionada}")
         top_df = df[df["ev"] >= (min_ev / 100.0)].sort_values("ev", ascending=False)
         
         if top_df.empty:
-            st.info("No hay apuestas que cumplan el filtro de EV mínimo.")
+            st.info("No hay apuestas que cumplan el filtro de EV mínimo para este nivel de probabilidad.")
         else:
             for _, r in top_df.head(10).iterrows():
                 ev_p = float(r.ev) * 100
@@ -200,13 +199,16 @@ def main():
                 """, unsafe_allow_html=True)
 
     with tab_matches:
-        st.caption("Desglose completo de mercados por encuentro.")
+        st.caption("Mercados filtrados (excluyendo baja probabilidad).")
         partidos = df[["home", "away", "home_crest", "away_crest", "date", "time"]].drop_duplicates()
         
         for _, match in partidos.iterrows():
             h, a, h_crest, a_crest, m_date, m_time = match["home"], match["away"], match["home_crest"], match["away_crest"], match["date"], match["time"]
             subset = df[(df["home"] == h) & (df["away"] == a)]
             
+            if subset.empty:
+                continue
+                
             h_img = f'<img src="{h_crest}" width="22" style="vertical-align:middle;margin-right:8px;">' if h_crest else ''
             a_img = f'<img src="{a_crest}" width="22" style="vertical-align:middle;margin-right:8px;">' if a_crest else ''
             
@@ -249,7 +251,7 @@ def main():
             st.success(f"Sugerencia para la mejor oportunidad ({s.home} vs {s.away}): **€{stake:.2f}** ({stake/bank*100:.1f}% de tu bank).")
 
     st.divider()
-    st.caption("ValueBet Football V5.0 — Multi-Market Engine")
+    st.caption("ValueBet Football V5.1 — High Probability Filter")
 
 if __name__ == "__main__":
     main()
