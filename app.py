@@ -6,7 +6,7 @@ import requests
 import math
 
 st.set_page_config(
-    page_title="ValueBet Football Multi-Market",
+    page_title="ValueBet Football Pro",
     page_icon="⚽",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -21,17 +21,15 @@ h2 {font-size: 1.25rem !important; margin-top: 1rem !important;}
   padding: 14px; border-radius: 16px; border: 1px solid rgba(128,128,128,.2);
   margin-bottom: 12px; background: rgba(128,128,128,.03);
 }
-.market-row {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 8px 0; border-top: 1px solid rgba(128,128,128,.1);
-  font-size: 0.9rem;
+.market-box {
+  background: rgba(128,128,128,.04); border: 1px solid rgba(128,128,128,.12);
+  border-radius: 10px; padding: 10px 12px; margin-bottom: 8px;
 }
 .badge-value { background: rgba(46, 204, 113, 0.15); color: #2ecc71; padding: 3px 8px; border-radius: 8px; font-weight: 700; font-size: 0.75rem;}
 .badge-neutral { background: rgba(128, 128, 128, 0.15); opacity: 0.8; padding: 3px 8px; border-radius: 8px; font-size: 0.75rem;}
 </style>
 """, unsafe_allow_html=True)
 
-# Función general de Poisson para mercados (goles, córners, tarjetas, etc.)
 def poisson_prob_over(expected_value, line):
     prob_under = 0
     for k in range(int(math.floor(line)) + 1):
@@ -91,7 +89,6 @@ def load_multimarket_data(competition="PD"):
             h_stat = team_stats.get(home, {"gf": league_avg_goals, "ga": league_avg_goals})
             a_stat = team_stats.get(away, {"gf": league_avg_goals, "ga": league_avg_goals})
             
-            # Cálculos de mercados
             home_exp_g = (h_stat["gf"] + a_stat["ga"]) / 2
             away_exp_g = (a_stat["gf"] + h_stat["ga"]) / 2
             
@@ -119,16 +116,15 @@ def load_multimarket_data(competition="PD"):
             ev_shots = (prob_shots * odds_shots) - 1
 
             markets = [
-                ("Goles Totales", "+2.5", prob_goals, odds_g, fair_g, ev_g),
-                ("Córners Totales", "+9.5", prob_corners, odds_c, fair_c, ev_c),
-                ("Tarjetas Totales", "+4.5", prob_cards, odds_cards, fair_cards, ev_cards),
-                ("Disparos a Puerta", "+8.5", prob_shots, odds_shots, fair_shots, ev_shots)
+                ("⚽ Goles Totales", "+2.5", prob_goals, odds_g, fair_g, ev_g),
+                ("📐 Córners Totales", "+9.5", prob_corners, odds_c, fair_c, ev_c),
+                ("🟨 Tarjetas Totales", "+4.5", prob_cards, odds_cards, fair_cards, ev_cards),
+                ("🎯 Disparos a Puerta", "+8.5", prob_shots, odds_shots, fair_shots, ev_shots)
             ]
 
             for mkt, line, prob, odds, fair, ev in markets:
-                # FILTRO ESTRICTO: Solo añadimos mercados con probabilidad >= 45% (0.45)
                 if prob >= 0.45:
-                    rating = "🔥 VALUE ALTO" if ev > 0.04 else ("⚖️ NEUTRAL" if ev > -0.05 else "🔴 PASAR")
+                    rating = "🔥 VALUE" if ev > 0.04 else "⚖️ NEUTRAL"
                     parsed_data.append([
                         home, away, home_crest, away_crest, match_date, match_time,
                         mkt, line, prob, odds, fair, ev, rating
@@ -143,7 +139,7 @@ def load_multimarket_data(competition="PD"):
         return pd.DataFrame(), str(e)
 
 def main():
-    st.title("⚽ ValueBet Multi-Market")
+    st.title("⚽ ValueBet Pro")
 
     competitions = {
         "PD (La Liga)": {"code": "PD", "emblem": "🇪🇸"},
@@ -175,7 +171,7 @@ def main():
         top_df = df[df["ev"] >= (min_ev / 100.0)].sort_values("ev", ascending=False)
         
         if top_df.empty:
-            st.info("No hay apuestas que cumplan el filtro de EV mínimo para este nivel de probabilidad.")
+            st.info("No hay apuestas que cumplan el filtro de EV mínimo.")
         else:
             for _, r in top_df.head(10).iterrows():
                 ev_p = float(r.ev) * 100
@@ -199,7 +195,7 @@ def main():
                 """, unsafe_allow_html=True)
 
     with tab_matches:
-        st.caption("Mercados filtrados (excluyendo baja probabilidad).")
+        st.caption("📅 Calendario detallado y análisis de mercados por encuentro.")
         partidos = df[["home", "away", "home_crest", "away_crest", "date", "time"]].drop_duplicates()
         
         for _, match in partidos.iterrows():
@@ -212,25 +208,35 @@ def main():
             h_img = f'<img src="{h_crest}" width="22" style="vertical-align:middle;margin-right:8px;">' if h_crest else ''
             a_img = f'<img src="{a_crest}" width="22" style="vertical-align:middle;margin-right:8px;">' if a_crest else ''
             
-            with st.expander(f"{m_date} ({m_time}) | {h} vs {a}", expanded=False):
+            # Etiqueta visual del número de mercados analizados para este partido
+            num_mercados = len(subset)
+            
+            with st.expander(f"📌 {m_date} ({m_time})  |  {h} vs {a}  ({num_mercados} mercados)", expanded=False):
                 st.markdown(f"""
-                <div style="display:flex; gap:15px; margin-bottom:10px; font-weight:600;">
-                  <div>{h_img}{h}</div>
-                  <div style="opacity:0.5;">vs</div>
-                  <div>{a_img}{a}</div>
+                <div style="display:flex; align-items:center; justify-content:space-between; background:rgba(128,128,128,0.06); padding:10px 14px; border-radius:10px; margin-bottom:12px;">
+                  <div>{h_img}<b>{h}</b></div>
+                  <div style="font-size:0.85rem; opacity:0.6; font-weight:bold;">VS</div>
+                  <div>{a_img}<b>{a}</b></div>
                 </div>
                 """, unsafe_allow_html=True)
                 
                 for _, r in subset.iterrows():
                     ev_p = float(r.ev) * 100
+                    color_ev = '#2ecc71' if ev_p > 0 else '#e74c3c'
+                    badge_bg = 'rgba(46, 204, 113, 0.12)' if ev_p > 0 else 'rgba(231, 76, 60, 0.12)'
+                    
                     st.markdown(f"""
-                    <div style="display:flex; justify-content:space-between; align-items:center; padding: 6px 0; border-top: 1px solid rgba(128,128,128,0.1);">
-                      <div>
-                        <b>{r.market}</b> <span style="opacity:0.7;">{r.line}</span><br>
-                        <span style="font-size:0.8rem; opacity:0.7;">Cuota: {r.odds:.2f} | Prob: {r.probability_pct:.1f}%</span>
+                    <div class="market-box">
+                      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                        <span style="font-weight:700; font-size:0.95rem;">{r.market} <span style="opacity:0.7; font-weight:normal;">({r.line})</span></span>
+                        <span style="background:{badge_bg}; color:{color_ev}; padding:2px 8px; border-radius:6px; font-weight:700; font-size:0.8rem;">EV {ev_p:+.1f}%</span>
                       </div>
-                      <div style="text-align:right;">
-                        <b style="color: {'#2ecc71' if ev_p > 0 else '#e74c3c'};">EV {ev_p:+.1f}%</b>
+                      <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.85rem; opacity:0.85; margin-top:6px;">
+                        <div>Probabilidad: <b>{r.probability_pct:.1f}%</b></div>
+                        <div>Cuota: <b>{r.odds:.2f}</b> <span style="font-size:0.75rem; opacity:0.6;">(Justa: {r.fair_odds:.2f})</span></div>
+                      </div>
+                      <div style="width:100%; background:rgba(128,128,128,0.15); height:4px; border-radius:2px; margin-top:6px;">
+                        <div style="width:{min(100, r.probability_pct)}%; background:#3498db; height:4px; border-radius:2px;"></div>
                       </div>
                     </div>
                     """, unsafe_allow_html=True)
@@ -251,7 +257,7 @@ def main():
             st.success(f"Sugerencia para la mejor oportunidad ({s.home} vs {s.away}): **€{stake:.2f}** ({stake/bank*100:.1f}% de tu bank).")
 
     st.divider()
-    st.caption("ValueBet Football V5.1 — High Probability Filter")
+    st.caption("ValueBet Football Pro V6.0 — Visual UI Redesign")
 
 if __name__ == "__main__":
     main()
