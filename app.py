@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timedelta
 import requests
 import math
 
@@ -80,10 +80,12 @@ def load_multimarket_data(competition="PD"):
             utc_date = m.get("utcDate", "")
             try:
                 dt = datetime.strptime(utc_date, "%Y-%m-%dT%H:%M:%SZ")
-                match_date = dt.strftime("%d/%m")
+                match_date_str = dt.strftime("%d/%m")
+                match_date_obj = dt.date()
                 match_time = dt.strftime("%H:%M")
             except:
-                match_date = "Próx."
+                match_date_str = "Próx."
+                match_date_obj = datetime.now().date()
                 match_time = ""
 
             h_stat = team_stats.get(home, {"gf": league_avg_goals, "ga": league_avg_goals})
@@ -126,12 +128,12 @@ def load_multimarket_data(competition="PD"):
                 if prob >= 0.45:
                     rating = "🔥 VALUE" if ev > 0.04 else "⚖️ NEUTRAL"
                     parsed_data.append([
-                        home, away, home_crest, away_crest, match_date, match_time,
+                        home, away, home_crest, away_crest, match_date_str, match_date_obj, match_time,
                         mkt, line, prob, odds, fair, ev, rating
                     ])
             
         if parsed_data:
-            return pd.DataFrame(parsed_data, columns=["home","away","home_crest","away_crest","date","time","market","line","probability","odds","fair_odds","ev","rating"]), "OK"
+            return pd.DataFrame(parsed_data, columns=["home","away","home_crest","away_crest","date","date_obj","time","market","line","probability","odds","fair_odds","ev","rating"]), "OK"
         else:
             return pd.DataFrame(), "No hay partidos que cumplan el filtro de probabilidad mínima (45%)."
             
@@ -164,19 +166,26 @@ def main():
 
     df["probability_pct"] = df["probability"] * 100
 
-    tab_top, tab_matches, tab_sim = st.tabs(["🔥 Top Value (Hoy)", "📅 Partidos y Mercados", "💰 Simulador"])
+    tab_top, tab_matches, tab_sim = st.tabs(["🔥 Top Value por Fecha", "📅 Partidos y Mercados", "💰 Simulador"])
 
     with tab_top:
-        hoy_str = datetime.now().strftime("%d/%m")
-        st.caption(f"{competitions[liga_seleccionada]['emblem']} Oportunidades exclusivas para hoy ({hoy_str}) con probabilidad > 45%")
+        st.caption(f"{competitions[liga_seleccionada]['emblem']} Selecciona una fecha para ver las mejores oportunidades del día con probabilidad > 45%")
         
-        # FILTRO EXCLUSIVO PARA PARTIDOS DE HOY
-        today_df = df[df["date"] == hoy_str]
-        top_df = today_df[today_df["ev"] >= (min_ev / 100.0)].sort_values("ev", ascending=False)
+        # Selector interactivo de fecha (por defecto hoy, permite ver mañana u otros días)
+        col_date, col_info = st.columns([2, 3])
+        with col_date:
+            selected_date = st.date_input("Consultar pronósticos para la fecha:", value=datetime.now().date())
+        
+        selected_date_str = selected_date.strftime("%d/%m")
+        
+        # Filtrar por la fecha seleccionada
+        day_df = df[df["date_obj"] == selected_date]
+        top_df = day_df[day_df["ev"] >= (min_ev / 100.0)].sort_values("ev", ascending=False)
         
         if top_df.empty:
-            st.info(f"No hay pronósticos con valor mínimo para partidos programados estrictamente para hoy ({hoy_str}). Revisa la pestaña de Partidos y Mercados para ver fechas futuras.")
+            st.info(f"ℹ️ No hay pronósticos con valor mínimo para el día **{selected_date_str}**. Prueba a seleccionar otra fecha (como mañana) o revisa la pestaña de Partidos y Mercados.")
         else:
+            st.markdown(f"**Mostrando pronósticos para el {selected_date_str}:**")
             for _, r in top_df.head(10).iterrows():
                 ev_p = float(r.ev) * 100
                 badge_class = "badge-value" if ev_p > 3 else "badge-neutral"
@@ -246,7 +255,7 @@ def main():
 
     with tab_sim:
         st.caption("Cálculo de stake recomendado mediante Criterio de Kelly.")
-        bank = st.number_input("Bankroll actual (€)", min_value=10.0, value=500.0, step=50.0)
+        bank = st.number_input("Bankroll actual (€)", min_value=10.0, value=500.0, step50.0)
         frac = st.slider("Criterio Kelly fraccionado", 0.05, 0.50, 0.25, 0.05)
         
         if not df.empty:
@@ -260,7 +269,7 @@ def main():
             st.success(f"Sugerencia para la mejor oportunidad ({s.home} vs {s.away}): **€{stake:.2f}** ({stake/bank*100:.1f}% de tu bank).")
 
     st.divider()
-    st.caption("ValueBet Football Pro V6.1 — Daily Filter Applied")
+    st.caption("ValueBet Football Pro V6.2 — Interactive Date Picker")
 
 if __name__ == "__main__":
     main()
