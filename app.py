@@ -75,10 +75,21 @@ def demo_data():
 def main():
     st.title("⚽ ValueBet Football")
 
-    # Barra lateral minimalista
+    # Barra lateral con las 5 grandes ligas y Champions League
     with st.sidebar:
         st.header("⚙️ Configuración")
-        liga_seleccionada = st.selectbox("Competición", ["PD (La Liga)", "PL (Premier League)", "CL (Champions League)"], index=0)
+        liga_seleccionada = st.selectbox(
+            "Competición", 
+            [
+                "PD (La Liga)", 
+                "PL (Premier League)", 
+                "CL (Champions League)", 
+                "SA (Serie A)", 
+                "BL1 (Bundesliga)", 
+                "FL1 (Ligue 1)"
+            ], 
+            index=0
+        )
         codigo_liga = liga_seleccionada.split(" ")[0]
         st.divider()
         min_ev = st.slider("EV mínimo (%)", -20, 30, 2, 1)
@@ -103,7 +114,7 @@ def main():
 
     # 1. PESTAÑA TOP VALUE
     with tab_top:
-        st.caption("Apuestas con mayor valor esperado (EV) detectado.")
+        st.caption(f"Apuestas con mayor valor esperado ({liga_seleccionada}).")
         top_df = df[df["ev"] >= min_ev].sort_values("ev", ascending=False)
         
         if top_df.empty:
@@ -164,7 +175,7 @@ def main():
             st.success(f"Sugerencia para la mejor cuota ({s.home} vs {s.away}): **€{stake:.2f}** ({stake/bank*100:.1f}% de tu bank).")
 
     st.divider()
-    st.caption("ValueBet Football V3.1 — Mobile UI")
+    st.caption("ValueBet Football V3.2 — Mobile UI")
 
 if __name__ == "__main__":
     main()
