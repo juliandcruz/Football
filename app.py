@@ -83,7 +83,6 @@ def load_multimarket_data(competition="PD"):
         return pd.DataFrame(), "Falta la clave secreta."
     
     headers = {"X-Auth-Token": api_key}
-    standings_url = f"https://api.football-data.org/v4/competitions/{competition}/standings"
     matches_url = f"https://api.football-data.org/v4/competitions/{competition}/matches?status=SCHEDULED"
     
     try:
@@ -93,35 +92,22 @@ def load_multimarket_data(competition="PD"):
         
         matches_data = resp_matches.json().get("matches", [])
         
-        team_stats = {}
-        resp_standings = requests.get(standings_url, headers=headers, timeout=10)
-        if resp_standings.status_code == 200:
-            standings_data = resp_standings.json().get("standings", [])
-            for st_type in standings_data:
-                table_type = st_type.get("type") 
-                if table_type in ["HOME", "AWAY"]:
-                    for row in st_type.get("table", []):
-                        t_name = row["team"]["name"]
-                        played = max(1, row.get("playedGames", 1))
-                        gf = row.get("goalsFor", 0) / played
-                        ga = row.get("goalsAgainst", 0) / played
-                        
-                        if t_name not in team_stats:
-                            team_stats[t_name] = {}
-                        
-                        if table_type == "HOME":
-                            team_stats[t_name]["home_gf"] = gf
-                            team_stats[t_name]["home_ga"] = ga
-                        else:
-                            team_stats[t_name]["away_gf"] = gf
-                            team_stats[t_name]["away_ga"] = ga
+        # 1. Cargamos el histórico CSV para extraer el rendimiento real de los equipos
+        csv_file = f"historico_{competition}.csv"
+        if competition == "PD" and not os.path.exists(csv_file) and os.path.exists("historico_liga.csv"):
+            csv_file = "historico_liga.csv"
 
-        hist_stats = load_historical_csv_stats(competition)
-        
-        league_avg_goals = 1.3
+        df_hist = pd.DataFrame()
+        if os.path.exists(csv_file):
+            try:
+                df_hist = pd.read_csv(csv_file, encoding='latin1')
+            except:
+                pass
+
         parsed_data = []
+        league_avg_goals = 1.3
         
-        for m in matches_data:
+        for i, m in enumerate(matches_data):
             home = m["homeTeam"]["name"]
             away = m["awayTeam"]["name"]
             home_crest = m["homeTeam"].get("crest", "")
@@ -138,42 +124,61 @@ def load_multimarket_data(competition="PD"):
                 match_date_obj = datetime.now().date()
                 match_time = ""
 
-            h_data = team_stats.get(home, {})
-            h_hist = hist_stats.get(home, {})
-            
-            h_gf = h_data.get("home_gf", h_hist.get("home_gf", league_avg_goals))
-            h_ga = h_data.get("home_ga", h_hist.get("home_ga", league_avg_goals))
-            
-            a_data = team_stats.get(away, {})
-            a_hist = hist_stats.get(away, {})
-            
-            a_gf = a_data.get("away_gf", a_hist.get("away_gf", league_avg_goals))
-            a_ga = a_data.get("away_ga", a_hist.get("away_ga", league_avg_goals))
-            
+            # Valores por defecto de respaldo
+            h_gf, h_ga, a_gf, a_ga = league_avg_goals, league_avg_goals, league_avg_goals, league_avg_goals
+
+            # 2. Extracción de estadísticas basadas puramente en el CSV histórico de los equipos
+            if not df_hist.empty and {'HomeTeam', 'AwayTeam', 'FTHG', 'FTAG'}.issubset(df_hist.columns):
+                home_games = df_hist[df_hist['HomeTeam'] == home]
+                away_games_as_home = df_hist[df_hist['AwayTeam'] == home]
+                
+                away_games = df_hist[df_hist['AwayTeam'] == away]
+                home_games_as_away = df_hist[df_hist['HomeTeam'] == away]
+
+                if not home_games.empty:
+                    h_gf = home_games['FTHG'].mean()
+                    h_ga = home_games['FTAG'].mean()
+                if not away_games_as_home.empty:
+                    h_gf = (h_gf + away_games_as_home['FTAG'].mean()) / 2
+                    h_ga = (h_ga + away_games_as_home['FTHG'].mean()) / 2
+
+                if not away_games.empty:
+                    a_gf = away_games['FTAG'].mean()
+                    a_ga = away_games['FTHG'].mean()
+                if not home_games_as_away.empty:
+                    a_gf = (a_gf + home_games_as_away['FTHG'].mean()) / 2
+                    a_ga = (a_ga + home_games_as_away['FTHG'].mean()) / 2
+
+            # 3. Cálculo de Expectativas Poisson puramente basadas en el Histórico
             home_exp_g = (h_gf + a_ga) / 2
             away_exp_g = (a_gf + h_ga) / 2
             
+            # Goles
             prob_goals = poisson_prob_over(home_exp_g + away_exp_g, 2.5)
             fair_g = 1 / prob_goals
-            odds_g = round(fair_g * np.random.uniform(0.96, 1.12), 2)
+            np.random.seed(i + 15)
+            odds_g = round(fair_g * np.random.uniform(0.93, 1.18), 2)
             ev_g = (prob_goals * odds_g) - 1
             
-            exp_corners = 9.2 + (home_exp_g - 1.2) * 1.5 + (away_exp_g - 1.2) * 1.0
+            # Córners (estimados a partir del ritmo y potencial ofensivo histórico)
+            exp_corners = 8.0 + (home_exp_g * 1.4) + (away_exp_g * 1.3)
             prob_corners = poisson_prob_over(exp_corners, 9.5)
             fair_c = 1 / prob_corners
-            odds_c = round(fair_c * np.random.uniform(0.95, 1.14), 2)
+            odds_c = round(fair_c * np.random.uniform(0.92, 1.19), 2)
             ev_c = (prob_corners * odds_c) - 1
 
-            exp_cards = 4.6
+            # Tarjetas (relacionadas con la intensidad defensiva y goles encajados históricos)
+            exp_cards = 3.5 + ((h_ga + a_ga) * 0.45)
             prob_cards = poisson_prob_over(exp_cards, 4.5)
             fair_cards = 1 / prob_cards
-            odds_cards = round(fair_cards * np.random.uniform(0.97, 1.12), 2)
+            odds_cards = round(fair_cards * np.random.uniform(0.94, 1.16), 2)
             ev_cards = (prob_cards * odds_cards) - 1
 
-            exp_shots = 8.8 + (home_exp_g + away_exp_g) * 1.2
+            # Disparos a puerta (proporcionales al potencial de gol histórico)
+            exp_shots = 6.5 + (home_exp_g * 2.4) + (away_exp_g * 2.0)
             prob_shots = poisson_prob_over(exp_shots, 8.5)
             fair_shots = 1 / prob_shots
-            odds_shots = round(fair_shots * np.random.uniform(0.95, 1.15), 2)
+            odds_shots = round(fair_shots * np.random.uniform(0.91, 1.21), 2)
             ev_shots = (prob_shots * odds_shots) - 1
 
             markets = [
@@ -184,8 +189,8 @@ def load_multimarket_data(competition="PD"):
             ]
 
             for mkt, line, prob, odds, fair, ev in markets:
-                if prob >= 0.45:
-                    rating = "🔥 VALUE" if ev > 0.04 else "⚖️ NEUTRAL"
+                if prob >= 0.38:
+                    rating = "🔥 VALUE" if ev > 0.03 else "⚖️ NEUTRAL"
                     parsed_data.append([
                         home, away, home_crest, away_crest, match_date_str, match_date_obj, match_time,
                         mkt, line, prob, odds, fair, ev, rating
@@ -194,7 +199,7 @@ def load_multimarket_data(competition="PD"):
         if parsed_data:
             return pd.DataFrame(parsed_data, columns=["home","away","home_crest","away_crest","date","date_obj","time","market","line","probability","odds","fair_odds","ev","rating"]), "OK"
         else:
-            return pd.DataFrame(), "No hay partidos que cumplan el filtro de probabilidad mínima (45%)."
+            return pd.DataFrame(), "No hay suficientes datos históricos para este cálculo."
             
     except Exception as e:
         return pd.DataFrame(), str(e)
@@ -228,7 +233,7 @@ def main():
     tab_top, tab_matches, tab_sim = st.tabs(["🔥 Top Value por Fecha", "📅 Partidos y Mercados", "💰 Simulador"])
 
     with tab_top:
-        st.caption(f"{competitions[liga_seleccionada]['emblem']} Pronósticos basados en rendimiento actual + histórico CSV (Prob > 45%)")
+        st.caption(f"{competitions[liga_seleccionada]['emblem']} Pronósticos basados íntegramente en el archivo CSV histórico (Prob > 38%)")
         
         col_date, col_info = st.columns([2, 3])
         with col_date:
@@ -265,7 +270,7 @@ def main():
                 """, unsafe_allow_html=True)
 
     with tab_matches:
-        st.caption("📅 Calendario detallado y análisis de mercados por encuentro.")
+        st.caption("📅 Calendario detallado y análisis de mercados por encuentro basado en histórico.")
         partidos = df[["home", "away", "home_crest", "away_crest", "date", "time"]].drop_duplicates()
         
         for _, match in partidos.iterrows():
@@ -326,7 +331,7 @@ def main():
             st.success(f"Sugerencia para la mejor oportunidad ({s.home} vs {s.away}): **€{stake:.2f}** ({stake/bank*100:.1f}% de tu bank).")
 
     st.divider()
-    st.caption("ValueBet Football Pro V8.4 — Clean Reset Engine")
+    st.caption("ValueBet Football Pro V8.5 — Historical Engine")
 
 if __name__ == "__main__":
     main()
