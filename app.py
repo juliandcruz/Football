@@ -19,12 +19,12 @@ st.markdown("""
 h1 {font-size: 1.6rem !important;}
 h2 {font-size: 1.25rem !important; margin-top: 1rem !important;}
 .match-card {
-  padding: 14px; border-radius: 16px; border: 1px solid rgba(128,128,128,.2);
-  margin-bottom: 12px; background: rgba(128,128,128,.03);
+    padding: 14px; border-radius: 16px; border: 1px solid rgba(128,128,128,.2);
+    margin-bottom: 12px; background: rgba(128,128,128,.03);
 }
 .market-box {
-  background: rgba(128,128,128,.04); border: 1px solid rgba(128,128,128,.12);
-  border-radius: 10px; padding: 10px 12px; margin-bottom: 8px;
+    background: rgba(128,128,128,.04); border: 1px solid rgba(128,128,128,.12);
+    border-radius: 10px; padding: 10px 12px; margin-bottom: 8px;
 }
 .badge-value { background: rgba(46, 204, 113, 0.15); color: #2ecc71; padding: 3px 8px; border-radius: 8px; font-weight: 700; font-size: 0.75rem;}
 .badge-neutral { background: rgba(128, 128, 128, 0.15); opacity: 0.8; padding: 3px 8px; border-radius: 8px; font-size: 0.75rem;}
@@ -111,12 +111,6 @@ def load_multimarket_data(competition="PD"):
         for i, m in enumerate(matches_data):
             home = m["homeTeam"]["name"]
             away = m["awayTeam"]["name"]
-            home_crest = m["homeTeam"].get("crest", "")
-            away_crest = m["awayTeam"].get("crest", "")
-
-            st.write(f"API -> Local: {home} | Visitante: {away}")
-            # ------------------------
-            
             home_crest = m["homeTeam"].get("crest", "")
             away_crest = m["awayTeam"].get("crest", "")
             
