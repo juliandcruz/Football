@@ -39,10 +39,10 @@ def poisson_prob_over(expected_value, line):
     return prob_over
 
 @st.cache_data(ttl=3600)
-def load_historical_csv_stats():
-    """Carga estadísticas de temporadas pasadas desde un archivo CSV local si existe"""
+def load_historical_csv_stats(competition="PD"):
+    """Carga estadísticas históricas dinámicamente según la competición seleccionada"""
     historical_stats = {}
-    csv_file = "historico_liga.csv"
+    csv_file = f"historico_{competition}.csv"
     
     if os.path.exists(csv_file):
         try:
@@ -55,18 +55,17 @@ def load_historical_csv_stats():
                     h_gf = home_games['FTHG'].mean() if not home_games.empty else 1.3
                     h_ga = home_games['FTAG'].mean() if not home_games.empty else 1.3
                     a_gf = away_games['FTAG'].mean() if not away_games.empty else 1.1
-                    a_ga = away_games['FTHG'].mean() if not away_games.empty else 1.3
+                    a_ga = home_games['FTHG'].mean() if not home_games.empty else 1.3
                     
                     historical_stats[team] = {
                         "home_gf": h_gf, "home_ga": h_ga,
                         "away_gf": a_gf, "away_ga": a_ga
                     }
-            # Comprobación visual en la barra lateral
-            st.sidebar.success(f"📂 Histórico cargado: {len(historical_stats)} equipos.")
+            st.sidebar.success(f"📂 Histórico ({competition}) cargado: {len(historical_stats)} equipos.")
         except Exception as e:
             st.sidebar.error(f"Error leyendo CSV: {e}")
     else:
-        st.sidebar.warning("⚠️ No se encontró historico_liga.csv")
+        st.sidebar.warning(f"⚠️ No se encontró {csv_file}")
             
     return historical_stats
 
@@ -112,8 +111,8 @@ def load_multimarket_data(competition="PD"):
                             team_stats[t_name]["away_gf"] = gf
                             team_stats[t_name]["away_ga"] = ga
 
-        # 2. Cargar datos históricos de respaldo (CSV)
-        hist_stats = load_historical_csv_stats()
+        # 2. Cargar datos históricos pasándole la competición actual
+        hist_stats = load_historical_csv_stats(competition)
         
         league_avg_goals = 1.3
         parsed_data = []
@@ -323,7 +322,7 @@ def main():
             st.success(f"Sugerencia para la mejor oportunidad ({s.home} vs {s.away}): **€{stake:.2f}** ({stake/bank*100:.1f}% de tu bank).")
 
     st.divider()
-    st.caption("ValueBet Football Pro V8.1 — Hybrid API + CSV Historical Engine")
+    st.caption("ValueBet Football Pro V8.2 — Multi-League Hybrid Engine")
 
 if __name__ == "__main__":
     main()
