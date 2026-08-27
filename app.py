@@ -92,7 +92,7 @@ def load_multimarket_data(competition="PD"):
         
         matches_data = resp_matches.json().get("matches", [])
         
-        # 1. Cargamos el histórico CSV para extraer el rendimiento real de los equipos
+        # 1. Cargamos el histórico CSV
         csv_file = f"historico_{competition}.csv"
         if competition == "PD" and not os.path.exists(csv_file) and os.path.exists("historico_liga.csv"):
             csv_file = "historico_liga.csv"
@@ -101,6 +101,10 @@ def load_multimarket_data(competition="PD"):
         if os.path.exists(csv_file):
             try:
                 df_hist = pd.read_csv(csv_file, encoding='latin1')
+                if 'HomeTeam' in df_hist.columns:
+                    df_hist['HomeTeam'] = df_hist['HomeTeam'].str.strip()
+                if 'AwayTeam' in df_hist.columns:
+                    df_hist['AwayTeam'] = df_hist['AwayTeam'].str.strip()
             except:
                 pass
 
@@ -124,32 +128,42 @@ def load_multimarket_data(competition="PD"):
                 match_date_obj = datetime.now().date()
                 match_time = ""
 
-            # Valores por defecto de respaldo
             h_gf, h_ga, a_gf, a_ga = league_avg_goals, league_avg_goals, league_avg_goals, league_avg_goals
 
-            # 2. Extracción de estadísticas basadas puramente en el CSV histórico de los equipos
+            # 2. Búsqueda inteligente y flexible en el CSV histórico
             if not df_hist.empty and {'HomeTeam', 'AwayTeam', 'FTHG', 'FTAG'}.issubset(df_hist.columns):
-                home_games = df_hist[df_hist['HomeTeam'] == home]
-                away_games_as_home = df_hist[df_hist['AwayTeam'] == home]
+                home_clean = home.replace("CF", "").replace("FC", "").strip()
+                away_clean = away.replace("CF", "").replace("FC", "").strip()
+
+                home_games = df_hist[df_hist['HomeTeam'].str.contains(home_clean, case=False, na=False)]
+                away_games_as_home = df_hist[df_hist['AwayTeam'].str.contains(home_clean, case=False, na=False)]
                 
-                away_games = df_hist[df_hist['AwayTeam'] == away]
-                home_games_as_away = df_hist[df_hist['HomeTeam'] == away]
+                away_games = df_hist[df_hist['AwayTeam'].str.contains(away_clean, case=False, na=False)]
+                home_games_as_away = df_hist[df_hist['HomeTeam'].str.contains(away_clean, case=False, na=False)]
 
-                if not home_games.empty:
-                    h_gf = home_games['FTHG'].mean()
-                    h_ga = home_games['FTAG'].mean()
-                if not away_games_as_home.empty:
-                    h_gf = (h_gf + away_games_as_home['FTAG'].mean()) / 2
-                    h_ga = (h_ga + away_games_as_home['FTHG'].mean()) / 2
+                if not home_games.empty or not away_games_as_home.empty:
+                    hg_list, ha_list = [], []
+                    if not home_games.empty:
+                        hg_list.append(home_games['FTHG'].mean())
+                        ha_list.append(home_games['FTAG'].mean())
+                    if not away_games_as_home.empty:
+                        hg_list.append(away_games_as_home['FTAG'].mean())
+                        ha_list.append(away_games_as_home['FTHG'].mean())
+                    h_gf = sum(hg_list) / len(hg_list)
+                    h_ga = sum(ha_list) / len(ha_list)
 
-                if not away_games.empty:
-                    a_gf = away_games['FTAG'].mean()
-                    a_ga = away_games['FTHG'].mean()
-                if not home_games_as_away.empty:
-                    a_gf = (a_gf + home_games_as_away['FTHG'].mean()) / 2
-                    a_ga = (a_ga + home_games_as_away['FTHG'].mean()) / 2
+                if not away_games.empty or not home_games_as_away.empty:
+                    ag_list, aa_list = [], []
+                    if not away_games.empty:
+                        ag_list.append(away_games['FTAG'].mean())
+                        aa_list.append(away_games['FTHG'].mean())
+                    if not home_games_as_away.empty:
+                        ag_list.append(home_games_as_away['FTHG'].mean())
+                        aa_list.append(home_games_as_away['FTAG'].mean())
+                    a_gf = sum(ag_list) / len(ag_list)
+                    a_ga = sum(aa_list) / len(aa_list)
 
-            # 3. Cálculo de Expectativas Poisson puramente basadas en el Histórico
+            # 3. Cálculo de Expectativas Poisson únicas por partido
             home_exp_g = (h_gf + a_ga) / 2
             away_exp_g = (a_gf + h_ga) / 2
             
@@ -160,22 +174,22 @@ def load_multimarket_data(competition="PD"):
             odds_g = round(fair_g * np.random.uniform(0.93, 1.18), 2)
             ev_g = (prob_goals * odds_g) - 1
             
-            # Córners (estimados a partir del ritmo y potencial ofensivo histórico)
-            exp_corners = 8.0 + (home_exp_g * 1.4) + (away_exp_g * 1.3)
+            # Córners (variados según el potencial de ambos)
+            exp_corners = 7.5 + (home_exp_g * 1.5) + (away_exp_g * 1.4)
             prob_corners = poisson_prob_over(exp_corners, 9.5)
             fair_c = 1 / prob_corners
             odds_c = round(fair_c * np.random.uniform(0.92, 1.19), 2)
             ev_c = (prob_corners * odds_c) - 1
 
-            # Tarjetas (relacionadas con la intensidad defensiva y goles encajados históricos)
-            exp_cards = 3.5 + ((h_ga + a_ga) * 0.45)
+            # Tarjetas (variadas según debilidad defensiva)
+            exp_cards = 3.2 + ((h_ga + a_ga) * 0.5)
             prob_cards = poisson_prob_over(exp_cards, 4.5)
             fair_cards = 1 / prob_cards
             odds_cards = round(fair_cards * np.random.uniform(0.94, 1.16), 2)
             ev_cards = (prob_cards * odds_cards) - 1
 
-            # Disparos a puerta (proporcionales al potencial de gol histórico)
-            exp_shots = 6.5 + (home_exp_g * 2.4) + (away_exp_g * 2.0)
+            # Disparos a puerta
+            exp_shots = 6.0 + (home_exp_g * 2.6) + (away_exp_g * 2.1)
             prob_shots = poisson_prob_over(exp_shots, 8.5)
             fair_shots = 1 / prob_shots
             odds_shots = round(fair_shots * np.random.uniform(0.91, 1.21), 2)
@@ -233,7 +247,7 @@ def main():
     tab_top, tab_matches, tab_sim = st.tabs(["🔥 Top Value por Fecha", "📅 Partidos y Mercados", "💰 Simulador"])
 
     with tab_top:
-        st.caption(f"{competitions[liga_seleccionada]['emblem']} Pronósticos basados íntegramente en el archivo CSV histórico (Prob > 38%)")
+        st.caption(f"{competitions[liga_seleccionada]['emblem']} Pronósticos basados en histórico flexible (Prob > 38%)")
         
         col_date, col_info = st.columns([2, 3])
         with col_date:
@@ -270,7 +284,7 @@ def main():
                 """, unsafe_allow_html=True)
 
     with tab_matches:
-        st.caption("📅 Calendario detallado y análisis de mercados por encuentro basado en histórico.")
+        st.caption("📅 Calendario detallado y análisis de mercados por encuentro.")
         partidos = df[["home", "away", "home_crest", "away_crest", "date", "time"]].drop_duplicates()
         
         for _, match in partidos.iterrows():
@@ -331,7 +345,7 @@ def main():
             st.success(f"Sugerencia para la mejor oportunidad ({s.home} vs {s.away}): **€{stake:.2f}** ({stake/bank*100:.1f}% de tu bank).")
 
     st.divider()
-    st.caption("ValueBet Football Pro V8.5 — Historical Engine")
+    st.caption("ValueBet Football Pro V8.6 — Flexible Historical Engine")
 
 if __name__ == "__main__":
     main()
