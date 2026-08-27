@@ -44,13 +44,11 @@ def load_historical_csv_stats(competition="PD"):
     historical_stats = {}
     csv_file = f"historico_{competition}.csv"
     
-    # Plan B por si acaso se quedó con el nombre antiguo para La Liga
     if competition == "PD" and not os.path.exists(csv_file) and os.path.exists("historico_liga.csv"):
         csv_file = "historico_liga.csv"
 
     if os.path.exists(csv_file):
         try:
-            # encoding='latin1' para evitar bloqueos con tildes o caracteres especiales del CSV
             df_hist = pd.read_csv(csv_file, encoding='latin1')
             
             if {'HomeTeam', 'AwayTeam', 'FTHG', 'FTAG'}.issubset(df_hist.columns):
@@ -73,7 +71,7 @@ def load_historical_csv_stats(competition="PD"):
         except Exception as e:
             st.sidebar.error(f"❌ Error al leer el CSV: {str(e)}")
     else:
-        st.sidebar.warning(f"⚠️ No se encontró {csv_file}")
+        st.sidebar.warning(f"⚠️ No se encontró el archivo {csv_file}")
             
     return historical_stats
 
@@ -95,7 +93,6 @@ def load_multimarket_data(competition="PD"):
         
         matches_data = resp_matches.json().get("matches", [])
         
-        # 1. Cargar datos de la API (Temporada actual)
         team_stats = {}
         resp_standings = requests.get(standings_url, headers=headers, timeout=10)
         if resp_standings.status_code == 200:
@@ -119,7 +116,6 @@ def load_multimarket_data(competition="PD"):
                             team_stats[t_name]["away_gf"] = gf
                             team_stats[t_name]["away_ga"] = ga
 
-        # 2. Cargar datos históricos pasándole la competición actual
         hist_stats = load_historical_csv_stats(competition)
         
         league_avg_goals = 1.3
@@ -244,7 +240,7 @@ def main():
         top_df = day_df[day_df["ev"] >= (min_ev / 100.0)].sort_values("ev", ascending=False)
         
         if top_df.empty:
-            st.info(f"ℹ️ No hay pronósticos con valor mínimo para el día **{selected_date_str}**. Prueba a seleccionar otra fecha (como mañana) o revisa la pestaña de Partidos y Mercados.")
+            st.info(f"ℹ️ No hay pronósticos con valor mínimo para el día **{selected_date_str}**. Prueba a seleccionar otra fecha o revisa la pestaña de Partidos y Mercados.")
         else:
             st.markdown(f"**Mostrando pronósticos para el {selected_date_str}:**")
             for _, r in top_df.head(10).iterrows():
@@ -330,7 +326,7 @@ def main():
             st.success(f"Sugerencia para la mejor oportunidad ({s.home} vs {s.away}): **€{stake:.2f}** ({stake/bank*100:.1f}% de tu bank).")
 
     st.divider()
-    st.caption("ValueBet Football Pro V8.3 — Robust Hybrid API + CSV Engine")
+    st.caption("ValueBet Football Pro V8.4 — Clean Reset Engine")
 
 if __name__ == "__main__":
     main()
