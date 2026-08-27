@@ -47,7 +47,6 @@ def load_historical_csv_stats():
     if os.path.exists(csv_file):
         try:
             df_hist = pd.read_csv(csv_file)
-            # Formato estándar de football-data.co.uk: HomeTeam, AwayTeam, FTHG, FTAG
             if {'HomeTeam', 'AwayTeam', 'FTHG', 'FTAG'}.issubset(df_hist.columns):
                 for team in pd.concat([df_hist['HomeTeam'], df_hist['AwayTeam']]).unique():
                     home_games = df_hist[df_hist['HomeTeam'] == team]
@@ -62,8 +61,12 @@ def load_historical_csv_stats():
                         "home_gf": h_gf, "home_ga": h_ga,
                         "away_gf": a_gf, "away_ga": a_ga
                     }
+            # Comprobación visual en la barra lateral
+            st.sidebar.success(f"📂 Histórico cargado: {len(historical_stats)} equipos.")
         except Exception as e:
-            pass
+            st.sidebar.error(f"Error leyendo CSV: {e}")
+    else:
+        st.sidebar.warning("⚠️ No se encontró historico_liga.csv")
             
     return historical_stats
 
@@ -132,11 +135,9 @@ def load_multimarket_data(competition="PD"):
                 match_date_obj = datetime.now().date()
                 match_time = ""
 
-            # Fusión inteligente: Si hay pocos partidos jugados esta temporada, ponderamos con el histórico del CSV
             h_data = team_stats.get(home, {})
             h_hist = hist_stats.get(home, {})
             
-            # Si no hay datos en la API, recurrimos al histórico del CSV o a la media de la liga
             h_gf = h_data.get("home_gf", h_hist.get("home_gf", league_avg_goals))
             h_ga = h_data.get("home_ga", h_hist.get("home_ga", league_avg_goals))
             
@@ -322,7 +323,7 @@ def main():
             st.success(f"Sugerencia para la mejor oportunidad ({s.home} vs {s.away}): **€{stake:.2f}** ({stake/bank*100:.1f}% de tu bank).")
 
     st.divider()
-    st.caption("ValueBet Football Pro V8.0 — Hybrid API + CSV Historical Engine")
+    st.caption("ValueBet Football Pro V8.1 — Hybrid API + CSV Historical Engine")
 
 if __name__ == "__main__":
     main()
