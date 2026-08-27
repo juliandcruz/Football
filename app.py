@@ -1,92 +1,155 @@
+
 import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import requests
 import math
 from pathlib import Path
+
 
 # ============================================================
 # CONFIGURACIÓN
 # ============================================================
 
 st.set_page_config(
-    page_title="ValueBet Football Pro",
+    page_title="ValueBet Pro",
     page_icon="⚽",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
+
+# ============================================================
+# ESTILO PROFESIONAL
+# ============================================================
+
 st.markdown("""
 <style>
+
 .block-container {
-    max-width: 1200px;
-    padding: 1rem .6rem 4rem .6rem;
+    max-width: 1150px;
+    padding: 1rem .8rem 4rem .8rem;
 }
 
-h1 {
-    font-size: 1.6rem !important;
+/* Header */
+
+.app-header {
+    padding: 4px 0 18px 0;
 }
 
-h2 {
-    font-size: 1.25rem !important;
-    margin-top: 1rem !important;
+.app-title {
+    font-size: 2rem;
+    font-weight: 800;
+    letter-spacing: -0.5px;
 }
 
-.match-card {
-    padding: 14px;
-    border-radius: 16px;
-    border: 1px solid rgba(128,128,128,.2);
-    margin-bottom: 12px;
-    background: rgba(128,128,128,.03);
-}
-
-.market-box {
-    background: rgba(128,128,128,.04);
-    border: 1px solid rgba(128,128,128,.12);
-    border-radius: 10px;
-    padding: 10px 12px;
-    margin-bottom: 8px;
-}
-
-.badge-value {
-    background: rgba(46, 204, 113, 0.15);
-    color: #2ecc71;
-    padding: 3px 8px;
-    border-radius: 8px;
-    font-weight: 700;
-    font-size: 0.75rem;
-}
-
-.badge-neutral {
-    background: rgba(128, 128, 128, 0.15);
-    opacity: 0.8;
-    padding: 3px 8px;
-    border-radius: 8px;
-    font-size: 0.75rem;
-}
-
-.badge-pass {
-    background: rgba(231, 76, 60, 0.12);
-    color: #e74c3c;
-    padding: 3px 8px;
-    border-radius: 8px;
-    font-weight: 700;
-    font-size: 0.75rem;
-}
-
-.stat-line {
+.app-subtitle {
+    opacity: .60;
     font-size: .85rem;
-    opacity: .85;
 }
 
-.warning-box {
-    padding: 12px;
-    border-radius: 10px;
-    background: rgba(241,196,15,.10);
-    border: 1px solid rgba(241,196,15,.25);
+/* Cards */
+
+.value-card {
+    border: 1px solid rgba(128,128,128,.18);
+    border-radius: 18px;
+    padding: 18px;
+    margin-bottom: 14px;
+    background: rgba(128,128,128,.035);
+}
+
+.match-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 14px;
+}
+
+.match-teams {
+    font-size: 1rem;
+    font-weight: 700;
+}
+
+.match-date {
+    font-size: .75rem;
+    opacity: .55;
+}
+
+.market-title {
+    font-size: 1.05rem;
+    font-weight: 750;
     margin-bottom: 12px;
 }
+
+.metric-box {
+    border-radius: 12px;
+    padding: 10px;
+    background: rgba(128,128,128,.06);
+    text-align: center;
+}
+
+.metric-label {
+    font-size: .70rem;
+    opacity: .55;
+}
+
+.metric-value {
+    font-size: 1.05rem;
+    font-weight: 750;
+}
+
+.ev-positive {
+    color: #2ecc71;
+}
+
+.ev-negative {
+    color: #e74c3c;
+}
+
+.value-badge {
+    display: inline-block;
+    padding: 4px 9px;
+    border-radius: 8px;
+    font-size: .72rem;
+    font-weight: 750;
+    background: rgba(46,204,113,.14);
+    color: #2ecc71;
+}
+
+.neutral-badge {
+    display: inline-block;
+    padding: 4px 9px;
+    border-radius: 8px;
+    font-size: .72rem;
+    background: rgba(128,128,128,.12);
+}
+
+.no-odds-badge {
+    display: inline-block;
+    padding: 4px 9px;
+    border-radius: 8px;
+    font-size: .72rem;
+    background: rgba(241,196,15,.12);
+    color: #f1c40f;
+}
+
+.section-title {
+    font-size: 1.25rem;
+    font-weight: 800;
+    margin-top: 8px;
+    margin-bottom: 12px;
+}
+
+.small-note {
+    font-size: .75rem;
+    opacity: .55;
+}
+
+hr {
+    opacity: .15;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -96,84 +159,85 @@ h2 {
 # ============================================================
 
 MIN_PROBABILITY = 0.45
-MIN_EV = 0.03
-
-KELLY_FRACTION_DEFAULT = 0.25
-MAX_KELLY_STAKE = 0.02
-
 DEFAULT_LEAGUE_GOALS = 2.60
 DEFAULT_CORNERS = 9.5
 DEFAULT_CARDS = 4.5
 DEFAULT_SOT = 8.5
 
+MAX_KELLY_STAKE = 0.02
+
 
 # ============================================================
-# UTILIDADES
+# FUNCIONES MATEMÁTICAS
 # ============================================================
-
-def safe_float(value, default=np.nan):
-    try:
-        return float(value)
-    except Exception:
-        return default
-
 
 def poisson_pmf(k, lam):
-    if lam <= 0:
-        return 0.0
 
-    return math.exp(-lam) * (lam ** k) / math.factorial(k)
+    lam = max(0.01, float(lam))
+
+    return (
+        math.exp(-lam)
+        * lam ** k
+        / math.factorial(k)
+    )
 
 
 def poisson_prob_over(expected_value, line):
-    """
-    P(X > line)
 
-    Para una línea 2.5:
-        P(X >= 3)
+    expected_value = max(
+        0.01,
+        float(expected_value)
+    )
 
-    Para una línea 2.0:
-        P(X >= 3)
-    """
+    threshold = math.floor(
+        float(line)
+    ) + 1
 
-    expected_value = max(0.01, float(expected_value))
-    line = float(line)
-
-    threshold = math.floor(line) + 1
-
-    prob_under_or_equal = sum(
-        poisson_pmf(k, expected_value)
+    probability_under = sum(
+        poisson_pmf(
+            k,
+            expected_value
+        )
         for k in range(threshold)
     )
 
-    probability = 1.0 - prob_under_or_equal
+    probability = 1 - probability_under
 
-    return max(0.001, min(0.999, probability))
+    return max(
+        .001,
+        min(.999, probability)
+    )
 
 
 def fair_odds(probability):
+
     if probability <= 0:
         return np.nan
 
-    return 1.0 / probability
+    return 1 / probability
 
 
 def implied_probability(odds):
-    if odds is None or pd.isna(odds) or odds <= 1:
+
+    if pd.isna(odds) or odds <= 1:
         return np.nan
 
-    return 1.0 / odds
+    return 1 / odds
 
 
 def expected_value(probability, odds):
-    if odds is None or pd.isna(odds) or odds <= 1:
+
+    if pd.isna(odds) or odds <= 1:
         return np.nan
 
-    return (probability * odds) - 1
+    return probability * odds - 1
 
 
 def edge_probability(probability, odds):
-    implied = implied_probability(odds)
+
+    implied = implied_probability(
+        odds
+    )
 
     if pd.isna(implied):
         return np.nan
@@ -181,286 +245,268 @@ def edge_probability(probability, odds):
     return probability - implied
 
 
-def fractional_kelly(
+def kelly_fraction(
     probability,
     odds,
-    fraction=KELLY_FRACTION_DEFAULT,
-    max_stake=MAX_KELLY_STAKE
+    fraction=.25,
+    maximum=.02
 ):
-    """
-    Kelly fraccionado y limitado.
-
-    max_stake=0.02 significa máximo 2% del bankroll.
-    """
 
     if pd.isna(odds) or odds <= 1:
-        return 0.0
+        return 0
 
-    p = float(probability)
-    q = 1.0 - p
-    b = odds - 1.0
+    p = probability
+    q = 1 - p
+    b = odds - 1
 
-    raw_kelly = ((b * p) - q) / b
+    raw = (
+        (b * p) - q
+    ) / b
 
-    if raw_kelly <= 0:
-        return 0.0
+    if raw <= 0:
+        return 0
 
-    stake = raw_kelly * fraction
-
-    return min(stake, max_stake)
-
-
-def classify_value(ev):
-    if pd.isna(ev):
-        return "📊 SIN CUOTA"
-
-    ev_pct = ev * 100
-
-    if ev_pct >= 8:
-        return "🔥 VALUE ALTO"
-
-    if ev_pct >= 3:
-        return "🟢 VALUE"
-
-    if ev_pct >= 0:
-        return "⚖️ NEUTRAL"
-
-    return "🔴 PASAR"
-
-
-def confidence_score(probability, sample_quality):
-    """
-    Indicador sencillo de confianza.
-    NO representa una probabilidad de acierto adicional.
-    """
-
-    distance = abs(probability - 0.5)
-
-    score = 50 + distance * 100
-
-    score *= sample_quality
-
-    return max(0, min(100, score))
-
-
-# ============================================================
-# PARSEO DE FECHAS
-# ============================================================
-
-def parse_utc_datetime(utc_date):
-    if not utc_date:
-        return None
-
-    try:
-        dt = datetime.fromisoformat(
-            utc_date.replace("Z", "+00:00")
-        )
-
-        return dt
-
-    except Exception:
-        return None
-
-
-def local_match_info(utc_date):
-    dt = parse_utc_datetime(utc_date)
-
-    if dt is None:
-        now = datetime.now()
-
-        return (
-            "Próx.",
-            now.date(),
-            "",
-        )
-
-    # Streamlit se ejecutará en el servidor.
-    # Mostramos UTC explícitamente para evitar inventar
-    # una zona horaria local del usuario.
-    dt_utc = dt.astimezone(timezone.utc)
-
-    return (
-        dt_utc.strftime("%d/%m"),
-        dt_utc.date(),
-        dt_utc.strftime("%H:%M UTC"),
+    return min(
+        raw * fraction,
+        maximum
     )
 
 
 # ============================================================
-# CARGA DE CUOTAS REALES
+# FECHAS
+# ============================================================
+
+def parse_date(value):
+
+    try:
+
+        dt = datetime.fromisoformat(
+            value.replace(
+                "Z",
+                "+00:00"
+            )
+        )
+
+        dt = dt.astimezone(
+            timezone.utc
+        )
+
+        return (
+            dt.strftime("%d/%m"),
+            dt.date(),
+            dt.strftime("%H:%M")
+        )
+
+    except Exception:
+
+        now = datetime.now(
+            timezone.utc
+        )
+
+        return (
+            "Próx.",
+            now.date(),
+            ""
+        )
+
+
+# ============================================================
+# CUOTAS REALES
 # ============================================================
 
 @st.cache_data(ttl=300)
 def load_real_odds():
-    """
-    Carga cuotas desde data/odds.csv si existe.
 
-    Formato recomendado:
-
-    home,away,market,line,odds,bookmaker
-    Real Madrid,Real Sociedad,goals,+2.5,1.90,Betfair
-    """
-
-    path = Path("data/odds.csv")
+    path = Path(
+        "data/odds.csv"
+    )
 
     if not path.exists():
         return pd.DataFrame()
 
     try:
-        odds = pd.read_csv(path)
+
+        df = pd.read_csv(path)
 
         required = [
             "home",
             "away",
             "market",
             "line",
-            "odds",
+            "odds"
         ]
 
-        missing = [
-            c for c in required
-            if c not in odds.columns
-        ]
-
-        if missing:
+        if not all(
+            col in df.columns
+            for col in required
+        ):
             return pd.DataFrame()
 
-        odds["odds"] = pd.to_numeric(
-            odds["odds"],
+        df["odds"] = pd.to_numeric(
+            df["odds"],
             errors="coerce"
         )
 
-        odds = odds[
-            odds["odds"] > 1
+        return df[
+            df["odds"] > 1
         ].copy()
 
-        return odds
-
     except Exception:
+
         return pd.DataFrame()
 
 
-def find_real_odds(
+def get_real_odds(
     odds_df,
     home,
     away,
     market,
     line
 ):
-    """
-    Busca una cuota real.
-
-    La comparación utiliza nombres de equipos,
-    mercado y línea.
-    """
 
     if odds_df.empty:
         return np.nan, ""
 
-    candidates = odds_df[
-        (odds_df["home"].astype(str).str.lower() == str(home).lower()) &
-        (odds_df["away"].astype(str).str.lower() == str(away).lower()) &
-        (odds_df["market"].astype(str).str.lower() == str(market).lower()) &
-        (odds_df["line"].astype(str) == str(line))
+    matches = odds_df[
+        (
+            odds_df["home"]
+            .astype(str)
+            .str.lower()
+            ==
+            str(home).lower()
+        )
+        &
+        (
+            odds_df["away"]
+            .astype(str)
+            .str.lower()
+            ==
+            str(away).lower()
+        )
+        &
+        (
+            odds_df["market"]
+            .astype(str)
+            .str.lower()
+            ==
+            str(market).lower()
+        )
+        &
+        (
+            odds_df["line"]
+            .astype(str)
+            ==
+            str(line)
+        )
     ]
 
-    if candidates.empty:
+    if matches.empty:
         return np.nan, ""
 
-    row = candidates.iloc[0]
+    row = matches.iloc[0]
 
-    bookmaker = (
-        str(row["bookmaker"])
-        if "bookmaker" in row
-        else ""
+    bookmaker = ""
+
+    if "bookmaker" in matches.columns:
+        bookmaker = str(
+            row["bookmaker"]
+        )
+
+    return (
+        float(row["odds"]),
+        bookmaker
     )
-
-    return safe_float(row["odds"]), bookmaker
 
 
 # ============================================================
-# API FOOTBALL-DATA.ORG
+# API FOOTBALL DATA
 # ============================================================
 
 @st.cache_data(ttl=3600)
-def load_multimarket_data(competition="PD"):
+def load_data(competition):
 
     try:
+
         api_key = st.secrets[
             "FOOTBALL_DATA_API_KEY"
         ]
 
     except Exception:
+
         return (
             pd.DataFrame(),
-            "Falta FOOTBALL_DATA_API_KEY en Streamlit Secrets."
+            "Falta FOOTBALL_DATA_API_KEY."
         )
 
     headers = {
         "X-Auth-Token": api_key
     }
 
-    standings_url = (
-        f"https://api.football-data.org/v4/"
-        f"competitions/{competition}/standings"
+    matches_url = (
+        "https://api.football-data.org/v4/"
+        f"competitions/{competition}/matches"
+        "?status=SCHEDULED"
     )
 
-    matches_url = (
-        f"https://api.football-data.org/v4/"
-        f"competitions/{competition}/matches"
-        f"?status=SCHEDULED"
+    standings_url = (
+        "https://api.football-data.org/v4/"
+        f"competitions/{competition}/standings"
     )
 
     try:
 
-        resp_matches = requests.get(
+        response = requests.get(
             matches_url,
             headers=headers,
             timeout=15
         )
 
-        if resp_matches.status_code != 200:
+        if response.status_code != 200:
 
             return (
                 pd.DataFrame(),
-                f"Error API partidos: "
-                f"{resp_matches.status_code}"
+                f"Error API: {response.status_code}"
             )
 
-        matches_data = resp_matches.json().get(
+        matches = response.json().get(
             "matches",
             []
         )
 
-        # ----------------------------------------------------
-        # TABLA
-        # ----------------------------------------------------
-
         team_stats = {}
 
-        resp_standings = requests.get(
+        standings_response = requests.get(
             standings_url,
             headers=headers,
             timeout=15
         )
 
-        if resp_standings.status_code == 200:
+        if standings_response.status_code == 200:
 
-            standings_data = resp_standings.json().get(
-                "standings",
-                []
+            standings = (
+                standings_response
+                .json()
+                .get(
+                    "standings",
+                    []
+                )
             )
 
-            for standing in standings_data:
+            for table in standings:
 
-                if standing.get("type") != "TOTAL":
+                if table.get("type") != "TOTAL":
                     continue
 
-                for row in standing.get("table", []):
+                for row in table.get(
+                    "table",
+                    []
+                ):
 
-                    team = row["team"]["name"]
+                    team = row[
+                        "team"
+                    ]["name"]
 
-                    played = max(
+                    games = max(
                         1,
                         row.get(
                             "playedGames",
@@ -468,29 +514,31 @@ def load_multimarket_data(competition="PD"):
                         )
                     )
 
-                    goals_for = (
-                        row.get("goalsFor", 0)
-                        / played
-                    )
+                    team_stats[
+                        team
+                    ] = {
 
-                    goals_against = (
-                        row.get("goalsAgainst", 0)
-                        / played
-                    )
+                        "gf":
+                        row.get(
+                            "goalsFor",
+                            0
+                        ) / games,
 
-                    team_stats[team] = {
-                        "gf": goals_for,
-                        "ga": goals_against,
-                        "played": played
+                        "ga":
+                        row.get(
+                            "goalsAgainst",
+                            0
+                        ) / games,
+
+                        "played":
+                        games
                     }
 
-        parsed_data = []
+        odds_df = load_real_odds()
 
-        # ----------------------------------------------------
-        # PARTIDOS
-        # ----------------------------------------------------
+        rows = []
 
-        for match in matches_data:
+        for match in matches:
 
             home = match[
                 "homeTeam"
@@ -502,287 +550,240 @@ def load_multimarket_data(competition="PD"):
 
             home_crest = match[
                 "homeTeam"
-            ].get("crest", "")
+            ].get(
+                "crest",
+                ""
+            )
 
             away_crest = match[
                 "awayTeam"
-            ].get("crest", "")
+            ].get(
+                "crest",
+                ""
+            )
 
             (
-                match_date_str,
-                match_date_obj,
-                match_time
-            ) = local_match_info(
-                match.get("utcDate", "")
+                date_text,
+                date_obj,
+                time_text
+            ) = parse_date(
+                match.get(
+                    "utcDate",
+                    ""
+                )
             )
 
-            h_stat = team_stats.get(
+            h = team_stats.get(
                 home,
                 {
-                    "gf": DEFAULT_LEAGUE_GOALS / 2,
-                    "ga": DEFAULT_LEAGUE_GOALS / 2,
+                    "gf": 1.3,
+                    "ga": 1.3,
                     "played": 0
                 }
             )
 
-            a_stat = team_stats.get(
+            a = team_stats.get(
                 away,
                 {
-                    "gf": DEFAULT_LEAGUE_GOALS / 2,
-                    "ga": DEFAULT_LEAGUE_GOALS / 2,
+                    "gf": 1.3,
+                    "ga": 1.3,
                     "played": 0
                 }
             )
 
-            # ------------------------------------------------
-            # EXPECTED GOALS
-            # ------------------------------------------------
+            # -----------------------------------------------
+            # GOLES
+            # -----------------------------------------------
 
-            home_expected_goals = (
-                h_stat["gf"]
-                + a_stat["ga"]
+            home_xg = (
+                h["gf"] + a["ga"]
             ) / 2
 
-            away_expected_goals = (
-                a_stat["gf"]
-                + h_stat["ga"]
+            away_xg = (
+                a["gf"] + h["ga"]
             ) / 2
 
-            total_expected_goals = (
-                home_expected_goals
-                + away_expected_goals
+            total_xg = (
+                home_xg + away_xg
             )
 
-            total_expected_goals = max(
-                0.2,
-                min(6.0, total_expected_goals)
+            total_xg = max(
+                .2,
+                min(6, total_xg)
             )
 
-            prob_goals = poisson_prob_over(
-                total_expected_goals,
+            p_goals = poisson_prob_over(
+                total_xg,
                 2.5
             )
 
-            fair_g = fair_odds(
-                prob_goals
-            )
-
-            # ------------------------------------------------
+            # -----------------------------------------------
             # CÓRNERS
-            # ------------------------------------------------
+            # -----------------------------------------------
 
-            # IMPORTANTE:
-            # Es una estimación provisional porque
-            # football-data.org no proporciona aquí
-            # suficientes datos históricos de córners.
-
-            exp_corners = (
+            expected_corners = (
                 DEFAULT_CORNERS
-                + (home_expected_goals - 1.3) * 1.0
-                + (away_expected_goals - 1.3) * 0.8
+                + (
+                    home_xg - 1.3
+                ) * 1.0
+                + (
+                    away_xg - 1.3
+                ) * .8
             )
 
-            exp_corners = max(
-                5.0,
-                min(15.0, exp_corners)
+            expected_corners = max(
+                5,
+                min(
+                    15,
+                    expected_corners
+                )
             )
 
-            prob_corners = poisson_prob_over(
-                exp_corners,
+            p_corners = poisson_prob_over(
+                expected_corners,
                 9.5
             )
 
-            fair_c = fair_odds(
-                prob_corners
-            )
-
-            # ------------------------------------------------
+            # -----------------------------------------------
             # TARJETAS
-            # ------------------------------------------------
+            # -----------------------------------------------
 
-            exp_cards = DEFAULT_CARDS
-
-            prob_cards = poisson_prob_over(
-                exp_cards,
+            p_cards = poisson_prob_over(
+                DEFAULT_CARDS,
                 4.5
             )
 
-            fair_cards = fair_odds(
-                prob_cards
-            )
-
-            # ------------------------------------------------
+            # -----------------------------------------------
             # TIROS A PUERTA
-            # ------------------------------------------------
+            # -----------------------------------------------
 
-            exp_sot = (
+            expected_sot = (
                 DEFAULT_SOT
-                + (total_expected_goals - 2.6) * 1.5
+                +
+                (
+                    total_xg - 2.6
+                ) * 1.5
             )
 
-            exp_sot = max(
-                4.0,
-                min(15.0, exp_sot)
+            expected_sot = max(
+                4,
+                min(
+                    15,
+                    expected_sot
+                )
             )
 
-            prob_sot = poisson_prob_over(
-                exp_sot,
+            p_sot = poisson_prob_over(
+                expected_sot,
                 8.5
             )
-
-            fair_sot = fair_odds(
-                prob_sot
-            )
-
-            # ------------------------------------------------
-            # MERCADOS
-            # ------------------------------------------------
 
             markets = [
 
                 (
                     "goals",
-                    "⚽ Goles Totales",
+                    "⚽ Goles",
                     "+2.5",
-                    prob_goals,
-                    fair_g
+                    p_goals
                 ),
 
                 (
                     "corners",
-                    "📐 Córners Totales",
+                    "📐 Córners",
                     "+9.5",
-                    prob_corners,
-                    fair_c
+                    p_corners
                 ),
 
                 (
                     "cards",
-                    "🟨 Tarjetas Totales",
+                    "🟨 Tarjetas",
                     "+4.5",
-                    prob_cards,
-                    fair_cards
+                    p_cards
                 ),
 
                 (
                     "sot",
-                    "🎯 Disparos a Puerta",
+                    "🎯 Tiros a puerta",
                     "+8.5",
-                    prob_sot,
-                    fair_sot
+                    p_sot
                 )
             ]
 
             for (
-                market_code,
-                market_name,
+                code,
+                name,
                 line,
-                probability,
-                fair
+                probability
             ) in markets:
 
                 if probability < MIN_PROBABILITY:
                     continue
 
-                # --------------------------------------------
-                # CUOTA REAL
-                # --------------------------------------------
-
-                odds_df = load_real_odds()
-
-                odds, bookmaker = find_real_odds(
-                    odds_df,
-                    home,
-                    away,
-                    market_code,
-                    line
+                odds, bookmaker = (
+                    get_real_odds(
+                        odds_df,
+                        home,
+                        away,
+                        code,
+                        line
+                    )
                 )
 
-                if pd.isna(odds):
-
-                    ev = np.nan
-                    edge = np.nan
-                    rating = "📊 SIN CUOTA"
-
-                else:
-
-                    ev = expected_value(
-                        probability,
-                        odds
-                    )
-
-                    edge = edge_probability(
-                        probability,
-                        odds
-                    )
-
-                    rating = classify_value(
-                        ev
-                    )
-
-                # --------------------------------------------
-                # CONFIANZA
-                # --------------------------------------------
-
-                total_played = min(
-                    h_stat.get("played", 0),
-                    a_stat.get("played", 0)
+                fair = fair_odds(
+                    probability
                 )
 
-                if total_played >= 15:
-                    quality = 1.0
-                elif total_played >= 8:
-                    quality = 0.85
-                elif total_played >= 4:
-                    quality = 0.70
-                else:
-                    quality = 0.55
-
-                confidence = confidence_score(
+                ev = expected_value(
                     probability,
-                    quality
+                    odds
                 )
 
-                parsed_data.append([
+                edge = edge_probability(
+                    probability,
+                    odds
+                )
+
+                rows.append([
+
                     home,
                     away,
+
                     home_crest,
                     away_crest,
-                    match_date_str,
-                    match_date_obj,
-                    match_time,
 
-                    market_code,
-                    market_name,
+                    date_text,
+                    date_obj,
+                    time_text,
+
+                    code,
+                    name,
                     line,
 
                     probability,
-                    odds,
                     fair,
 
+                    odds,
                     ev,
                     edge,
 
-                    bookmaker,
-                    rating,
-                    confidence,
-
-                    home_expected_goals,
-                    away_expected_goals
+                    bookmaker
                 ])
 
-        if not parsed_data:
+        if not rows:
 
             return (
                 pd.DataFrame(),
-                "No hay partidos disponibles."
+                "No hay datos."
             )
 
         columns = [
+
             "home",
             "away",
+
             "home_crest",
             "away_crest",
+
             "date",
             "date_obj",
             "time",
@@ -792,23 +793,18 @@ def load_multimarket_data(competition="PD"):
             "line",
 
             "probability",
-            "odds",
             "fair_odds",
 
+            "odds",
             "ev",
             "edge",
 
-            "bookmaker",
-            "rating",
-            "confidence",
-
-            "home_expected_goals",
-            "away_expected_goals"
+            "bookmaker"
         ]
 
         return (
             pd.DataFrame(
-                parsed_data,
+                rows,
                 columns=columns
             ),
             "OK"
@@ -818,104 +814,304 @@ def load_multimarket_data(competition="PD"):
 
         return (
             pd.DataFrame(),
-            f"Error: {e}"
+            str(e)
         )
 
 
 # ============================================================
-# MAIN
+# CARD DE VALUE
+# ============================================================
+
+def render_value_card(row):
+
+    probability = (
+        row["probability"] * 100
+    )
+
+    fair = row["fair_odds"]
+
+    odds = row["odds"]
+
+    ev = row["ev"]
+
+    if pd.isna(odds):
+
+        odds_text = "—"
+        ev_text = "—"
+        badge = (
+            '<span class="no-odds-badge">'
+            'SIN CUOTA'
+            '</span>'
+        )
+
+    else:
+
+        odds_text = f"{odds:.2f}"
+
+        ev_text = (
+            f"{ev * 100:+.1f}%"
+        )
+
+        if ev >= .08:
+
+            badge = (
+                '<span class="value-badge">'
+                '🔥 VALUE ALTO'
+                '</span>'
+            )
+
+        elif ev >= .03:
+
+            badge = (
+                '<span class="value-badge">'
+                '🟢 VALUE'
+                '</span>'
+            )
+
+        else:
+
+            badge = (
+                '<span class="neutral-badge">'
+                '⚖️ NEUTRAL'
+                '</span>'
+            )
+
+    home_img = ""
+
+    away_img = ""
+
+    if row["home_crest"]:
+
+        home_img = (
+            f'<img src="{row["home_crest"]}" '
+            f'width="22" '
+            f'style="vertical-align:middle;'
+            f'margin-right:7px;">'
+        )
+
+    if row["away_crest"]:
+
+        away_img = (
+            f'<img src="{row["away_crest"]}" '
+            f'width="22" '
+            f'style="vertical-align:middle;'
+            f'margin-right:7px;">'
+        )
+
+    bookmaker = row["bookmaker"]
+
+    if bookmaker:
+
+        bookmaker_html = (
+            f'<div class="small-note">'
+            f'Cuota: {bookmaker}'
+            f'</div>'
+        )
+
+    else:
+
+        bookmaker_html = ""
+
+    st.markdown(
+        f"""
+        <div class="value-card">
+
+            <div class="match-header">
+
+                <div class="match-teams">
+
+                    {home_img}
+                    {row["home"]}
+
+                    <span style="
+                    opacity:.45;
+                    padding:0 6px;
+                    ">
+                    vs
+                    </span>
+
+                    {away_img}
+                    {row["away"]}
+
+                </div>
+
+                <div class="match-date">
+
+                    {row["date"]}
+                    ·
+                    {row["time"]}
+
+                </div>
+
+            </div>
+
+            <div class="market-title">
+
+                {row["market"]}
+                <span style="opacity:.55;">
+                {row["line"]}
+                </span>
+
+                &nbsp;&nbsp;
+
+                {badge}
+
+            </div>
+
+            <div style="
+            display:grid;
+            grid-template-columns:
+            repeat(4,1fr);
+            gap:8px;
+            ">
+
+                <div class="metric-box">
+
+                    <div class="metric-label">
+                    PROBABILIDAD
+                    </div>
+
+                    <div class="metric-value">
+                    {probability:.1f}%
+                    </div>
+
+                </div>
+
+                <div class="metric-box">
+
+                    <div class="metric-label">
+                    CUOTA
+                    </div>
+
+                    <div class="metric-value">
+                    {odds_text}
+                    </div>
+
+                </div>
+
+                <div class="metric-box">
+
+                    <div class="metric-label">
+                    CUOTA JUSTA
+                    </div>
+
+                    <div class="metric-value">
+                    {fair:.2f}
+                    </div>
+
+                </div>
+
+                <div class="metric-box">
+
+                    <div class="metric-label">
+                    EV
+                    </div>
+
+                    <div class="metric-value ev-positive">
+                    {ev_text}
+                    </div>
+
+                </div>
+
+            </div>
+
+            {bookmaker_html}
+
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+
+# ============================================================
+# APP
 # ============================================================
 
 def main():
 
-    st.title("⚽ ValueBet Pro V6.4")
+    # --------------------------------------------------------
+    # HEADER
+    # --------------------------------------------------------
 
-    st.caption(
-        "Modelo de probabilidades + cuotas reales + EV. "
-        "Las selecciones sin cuota no se consideran apuestas de value."
+    st.markdown(
+        """
+        <div class="app-header">
+
+            <div class="app-title">
+                ⚽ ValueBet Pro
+            </div>
+
+            <div class="app-subtitle">
+                Análisis de mercados de fútbol
+            </div>
+
+        </div>
+        """,
+        unsafe_allow_html=True
     )
+
+    # --------------------------------------------------------
+    # CONFIG
+    # --------------------------------------------------------
 
     competitions = {
 
-        "PD (La Liga)": {
-            "code": "PD",
-            "emblem": "🇪🇸"
-        },
+        "🇪🇸 La Liga": "PD",
 
-        "PL (Premier League)": {
-            "code": "PL",
-            "emblem": "🇬🇧"
-        },
+        "🇬🇧 Premier League": "PL",
 
-        "CL (Champions League)": {
-            "code": "CL",
-            "emblem": "🇪🇺"
-        },
+        "🇪🇺 Champions League": "CL",
 
-        "SA (Serie A)": {
-            "code": "SA",
-            "emblem": "🇮🇹"
-        },
+        "🇮🇹 Serie A": "SA",
 
-        "BL1 (Bundesliga)": {
-            "code": "BL1",
-            "emblem": "🇩🇪"
-        },
+        "🇩🇪 Bundesliga": "BL1",
 
-        "FL1 (Ligue 1)": {
-            "code": "FL1",
-            "emblem": "🇫🇷"
-        }
+        "🇫🇷 Ligue 1": "FL1"
     }
 
-    # ========================================================
-    # SIDEBAR
-    # ========================================================
+    col1, col2 = st.columns(
+        [5, 1]
+    )
 
-    with st.sidebar:
+    with col1:
 
-        st.header("⚙️ Configuración")
-
-        liga_seleccionada = st.selectbox(
+        league_name = st.selectbox(
             "Competición",
-            list(competitions.keys()),
-            index=0
+            list(
+                competitions.keys()
+            ),
+            label_visibility="collapsed"
         )
 
-        codigo_liga = competitions[
-            liga_seleccionada
-        ]["code"]
+    with col2:
 
-        st.divider()
-
-        min_ev = st.slider(
-            "EV mínimo (%)",
-            -20,
-            30,
-            2,
-            1
+        refresh = st.button(
+            "🔄 Actualizar",
+            use_container_width=True
         )
 
-        st.divider()
+    if refresh:
 
-        st.caption(
-            "⚠️ Las cuotas deben proceder de "
-            "una fuente real. La aplicación ya "
-            "no genera cuotas aleatorias."
-        )
+        st.cache_data.clear()
 
-    # ========================================================
+        st.rerun()
+
+    competition = competitions[
+        league_name
+    ]
+
+    # --------------------------------------------------------
     # DATOS
-    # ========================================================
+    # --------------------------------------------------------
 
-    df, msg = load_multimarket_data(
-        codigo_liga
+    df, message = load_data(
+        competition
     )
 
     if df.empty:
 
-        st.warning(
-            f"⚠️ {msg}"
+        st.error(
+            f"⚠️ {message}"
         )
 
         return
@@ -924,507 +1120,167 @@ def main():
         df["probability"] * 100
     )
 
-    # ========================================================
-    # ESTADO DE CUOTAS
-    # ========================================================
-
-    with_odds = df[
-        df["odds"].notna()
-    ]
-
-    value_count = (
-        with_odds["ev"] >= min_ev / 100
-    ).sum()
-
-    c1, c2, c3, c4 = st.columns(4)
-
-    c1.metric(
-        "Partidos",
-        df[
-            ["home", "away"]
-        ].drop_duplicates().shape[0]
-    )
-
-    c2.metric(
-        "Mercados",
-        len(df)
-    )
-
-    c3.metric(
-        "Con cuota real",
-        len(with_odds)
-    )
-
-    c4.metric(
-        "Value encontrado",
-        int(value_count)
-    )
-
-    st.divider()
-
-    # ========================================================
+    # --------------------------------------------------------
     # TABS
-    # ========================================================
+    # --------------------------------------------------------
 
     (
         tab_top,
         tab_matches,
-        tab_sim
-    ) = st.tabs([
-        "🔥 Top Value por Fecha",
-        "📅 Partidos y Mercados",
-        "💰 Simulador"
-    ])
+        tab_bank
+    ) = st.tabs(
+        [
+            "🔥 Top Value",
+            "📅 Partidos",
+            "💰 Stake"
+        ]
+    )
 
     # ========================================================
-    # TAB TOP
+    # TOP VALUE
     # ========================================================
 
     with tab_top:
 
-        st.caption(
-            f"{competitions[liga_seleccionada]['emblem']} "
-            "Mejores oportunidades según el modelo."
+        st.markdown(
+            '<div class="section-title">'
+            '🔥 Mejores oportunidades'
+            '</div>',
+            unsafe_allow_html=True
         )
 
-        col_date, col_info = st.columns(
-            [2, 3]
+        selected_date = st.date_input(
+            "Fecha",
+            value=datetime.now().date(),
+            label_visibility="collapsed"
         )
 
-        with col_date:
-
-            selected_date = st.date_input(
-                "Fecha:",
-                value=datetime.now().date()
-            )
-
-        selected_date_str = (
-            selected_date.strftime("%d/%m")
-        )
-
-        day_df = df[
+        day = df[
             df["date_obj"] == selected_date
-        ]
-
-        top_df = day_df[
-            day_df["odds"].notna()
         ].copy()
 
-        top_df = top_df[
-            top_df["ev"] >= min_ev / 100
-        ]
+        # Solo apuestas con cuota real
+        value = day[
+            day["odds"].notna()
+        ].copy()
 
-        top_df = top_df.sort_values(
+        value = value.sort_values(
             "ev",
             ascending=False
         )
 
-        if top_df.empty:
+        if value.empty:
 
             st.info(
-                f"ℹ️ No hay cuotas reales con "
-                f"EV ≥ {min_ev}% para "
-                f"el {selected_date_str}."
+                "No hay cuotas reales cargadas "
+                "para esta fecha."
             )
-
-            no_odds = day_df[
-                day_df["odds"].isna()
-            ]
-
-            if not no_odds.empty:
-
-                st.markdown(
-                    f"""
-                    <div class="warning-box">
-                    📊 El modelo tiene
-                    <b>{len(no_odds)}</b>
-                    predicciones para este día,
-                    pero no hay cuotas reales
-                    cargadas para compararlas.
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
 
         else:
 
-            st.markdown(
-                f"**Top value del {selected_date_str}:**"
-            )
+            for _, row in value.head(
+                15
+            ).iterrows():
 
-            for _, r in top_df.head(10).iterrows():
-
-                ev_p = float(r.ev) * 100
-
-                if ev_p >= 8:
-                    badge_class = "badge-value"
-                elif ev_p >= 3:
-                    badge_class = "badge-value"
-                else:
-                    badge_class = "badge-neutral"
-
-                home_img = (
-                    f'<img src="{r.home_crest}" '
-                    f'width="20" '
-                    f'style="vertical-align:middle;'
-                    f'margin-right:6px;">'
-                    if r.home_crest
-                    else ''
-                )
-
-                away_img = (
-                    f'<img src="{r.away_crest}" '
-                    f'width="20" '
-                    f'style="vertical-align:middle;'
-                    f'margin-left:6px;'
-                    f'margin-right:6px;">'
-                    if r.away_crest
-                    else ''
-                )
-
-                st.markdown(
-                    f"""
-                    <div class="match-card">
-
-                    <div style="
-                    display:flex;
-                    justify-content:space-between;
-                    align-items:center;
-                    font-size:.8rem;
-                    opacity:.8;
-                    margin-bottom:6px;
-                    ">
-
-                    <span>
-                    {home_img}
-                    {r.home}
-                    vs
-                    {away_img}
-                    {r.away}
-                    </span>
-
-                    <span>
-                    📅 {r.date}
-                    —
-                    ⏰ {r.time}
-                    </span>
-
-                    </div>
-
-                    <div style="
-                    font-weight:700;
-                    font-size:1.05rem;
-                    margin:4px 0;
-                    ">
-
-                    {r.market}
-                    ({r.line})
-
-                    </div>
-
-                    <div>
-
-                    Prob:
-                    <b>{r.probability_pct:.1f}%</b>
-
-                    &nbsp;|&nbsp;
-
-                    Cuota:
-                    <b>{r.odds:.2f}</b>
-
-                    &nbsp;|&nbsp;
-
-                    Justa:
-                    <b>{r.fair_odds:.2f}</b>
-
-                    &nbsp;
-
-                    <span class="{badge_class}">
-                    EV {ev_p:+.1f}%
-                    </span>
-
-                    </div>
-
-                    <div class="stat-line">
-                    Edge:
-                    {r.edge * 100:+.1f} pp
-                    |
-                    Confianza:
-                    {r.confidence:.0f}/100
-                    |
-                    {r.bookmaker}
-                    </div>
-
-                    </div>
-                    """,
-                    unsafe_allow_html=True
+                render_value_card(
+                    row
                 )
 
     # ========================================================
-    # TAB PARTIDOS
+    # PARTIDOS
     # ========================================================
 
     with tab_matches:
 
-        st.caption(
-            "📅 Calendario y mercados disponibles."
+        st.markdown(
+            '<div class="section-title">'
+            '📅 Partidos'
+            '</div>',
+            unsafe_allow_html=True
         )
 
-        partidos = (
+        matches = (
             df[
                 [
                     "home",
                     "away",
-                    "home_crest",
-                    "away_crest",
                     "date",
                     "time"
                 ]
             ]
             .drop_duplicates()
             .sort_values(
-                ["date", "time"]
+                [
+                    "date",
+                    "time"
+                ]
             )
         )
 
-        for _, match in partidos.iterrows():
+        for _, match in matches.iterrows():
 
-            h = match["home"]
-            a = match["away"]
+            home = match["home"]
+            away = match["away"]
 
             subset = df[
-                (df["home"] == h) &
-                (df["away"] == a)
+                (df["home"] == home)
+                &
+                (df["away"] == away)
             ]
 
-            if subset.empty:
-                continue
-
-            h_crest = match["home_crest"]
-            a_crest = match["away_crest"]
-
-            h_img = (
-                f'<img src="{h_crest}" '
-                f'width="22" '
-                f'style="vertical-align:middle;'
-                f'margin-right:8px;">'
-                if h_crest
-                else ''
-            )
-
-            a_img = (
-                f'<img src="{a_crest}" '
-                f'width="22" '
-                f'style="vertical-align:middle;'
-                f'margin-right:8px;">'
-                if a_crest
-                else ''
-            )
-
-            num_mercados = len(subset)
-
             with st.expander(
-                f"📌 {match['date']} "
-                f"({match['time']}) | "
-                f"{h} vs {a} "
-                f"({num_mercados} mercados)"
+                f"{match['date']} "
+                f"· {match['time']} "
+                f"  {home} vs {away}"
             ):
 
-                st.markdown(
-                    f"""
-                    <div style="
-                    display:flex;
-                    align-items:center;
-                    justify-content:space-between;
-                    background:rgba(128,128,128,.06);
-                    padding:10px 14px;
-                    border-radius:10px;
-                    margin-bottom:12px;
-                    ">
+                for _, row in subset.iterrows():
 
-                    <div>
-                    {h_img}
-                    <b>{h}</b>
-                    </div>
-
-                    <div style="
-                    font-size:.85rem;
-                    opacity:.6;
-                    font-weight:bold;
-                    ">
-                    VS
-                    </div>
-
-                    <div>
-                    {a_img}
-                    <b>{a}</b>
-                    </div>
-
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-
-                for _, r in subset.iterrows():
-
-                    if pd.isna(r["odds"]):
-
-                        rating_html = (
-                            '<span class="badge-neutral">'
-                            '📊 SIN CUOTA'
-                            '</span>'
-                        )
-
-                        odds_html = (
-                            "Cuota: <b>—</b> "
-                            "(carga una cuota real)"
-                        )
-
-                    else:
-
-                        ev_p = r["ev"] * 100
-
-                        if ev_p >= 3:
-
-                            color_ev = "#2ecc71"
-
-                        elif ev_p >= 0:
-
-                            color_ev = "#f1c40f"
-
-                        else:
-
-                            color_ev = "#e74c3c"
-
-                        rating_html = (
-                            f'<span style="'
-                            f'color:{color_ev};'
-                            f'font-weight:700;">'
-                            f'EV {ev_p:+.1f}%'
-                            f'</span>'
-                        )
-
-                        odds_html = (
-                            f"Cuota: <b>{r.odds:.2f}</b> "
-                            f"(Justa: {r.fair_odds:.2f})"
-                        )
-
-                    st.markdown(
-                        f"""
-                        <div class="market-box">
-
-                        <div style="
-                        display:flex;
-                        justify-content:space-between;
-                        align-items:center;
-                        margin-bottom:4px;
-                        ">
-
-                        <span style="
-                        font-weight:700;
-                        font-size:.95rem;
-                        ">
-
-                        {r.market}
-
-                        <span style="
-                        opacity:.7;
-                        font-weight:normal;
-                        ">
-
-                        ({r.line})
-
-                        </span>
-
-                        </span>
-
-                        {rating_html}
-
-                        </div>
-
-                        <div style="
-                        display:flex;
-                        justify-content:space-between;
-                        align-items:center;
-                        font-size:.85rem;
-                        opacity:.85;
-                        margin-top:6px;
-                        ">
-
-                        <div>
-                        Probabilidad:
-                        <b>{r.probability_pct:.1f}%</b>
-                        </div>
-
-                        <div>
-                        {odds_html}
-                        </div>
-
-                        </div>
-
-                        <div style="
-                        width:100%;
-                        background:rgba(128,128,128,.15);
-                        height:4px;
-                        border-radius:2px;
-                        margin-top:6px;
-                        ">
-
-                        <div style="
-                        width:{min(100,r.probability_pct)}%;
-                        background:#3498db;
-                        height:4px;
-                        border-radius:2px;
-                        "></div>
-
-                        </div>
-
-                        <div class="stat-line">
-                        Confianza:
-                        {r.confidence:.0f}/100
-                        </div>
-
-                        </div>
-                        """,
-                        unsafe_allow_html=True
+                    render_value_card(
+                        row
                     )
 
     # ========================================================
-    # TAB SIMULADOR
+    # STAKE
     # ========================================================
 
-    with tab_sim:
+    with tab_bank:
 
-        st.caption(
-            "💰 Cálculo de stake con Kelly fraccionado."
+        st.markdown(
+            '<div class="section-title">'
+            '💰 Calculadora de stake'
+            '</div>',
+            unsafe_allow_html=True
         )
 
         bank = st.number_input(
-            "Bankroll actual (€)",
+            "Bankroll (€)",
             min_value=10.0,
             value=500.0,
             step=50.0
         )
 
-        frac = st.slider(
+        kelly = st.slider(
             "Kelly fraccionado",
-            0.05,
-            0.50,
-            0.25,
-            0.05
+            .05,
+            .50,
+            .25,
+            .05
         )
 
-        max_stake_pct = st.slider(
-            "Máximo por apuesta (% bankroll)",
-            0.25,
+        max_pct = st.slider(
+            "Máximo por apuesta (%)",
+            .25,
             5.0,
             2.0,
-            0.25
+            .25
         )
 
         eligible = df[
-            df["odds"].notna() &
-            df["ev"].notna() &
+            df["odds"].notna()
+            &
+            df["ev"].notna()
+            &
             (df["ev"] > 0)
         ].sort_values(
             "ev",
@@ -1434,70 +1290,62 @@ def main():
         if eligible.empty:
 
             st.info(
-                "No hay apuestas con cuota real "
-                "y EV positivo disponibles."
+                "No hay apuestas con EV positivo."
             )
 
         else:
 
-            s = eligible.iloc[0]
+            best = eligible.iloc[0]
 
-            p = float(
-                s["probability"]
-            )
-
-            o = float(
-                s["odds"]
-            )
-
-            max_stake = (
-                max_stake_pct / 100
-            )
-
-            stake_fraction = fractional_kelly(
-                p,
-                o,
-                fraction=frac,
-                max_stake=max_stake
+            stake_pct = kelly_fraction(
+                best["probability"],
+                best["odds"],
+                fraction=kelly,
+                maximum=max_pct / 100
             )
 
             stake = (
-                stake_fraction * bank
+                bank * stake_pct
             )
 
             st.success(
                 f"""
-                Mejor oportunidad:
-                **{s['home']} vs {s['away']} —
-                {s['market']} {s['line']}**
+                **{best["home"]} vs
+                {best["away"]}**
+
+                {best["market"]}
+                {best["line"]}
+
+                Probabilidad:
+                **{best["probability"]*100:.1f}%**
+
+                Cuota:
+                **{best["odds"]:.2f}**
+
+                EV:
+                **{best["ev"]*100:+.1f}%**
 
                 Stake orientativo:
                 **€{stake:.2f}**
-                ({stake_fraction*100:.2f}% del bankroll)
                 """
             )
 
             st.caption(
-                "Kelly es extremadamente sensible a "
-                "errores en la probabilidad. Úsalo como "
-                "referencia, no como garantía."
+                "El stake es una referencia matemática. "
+                "Un modelo puede equivocarse y el EV "
+                "estimado no garantiza beneficio."
             )
 
-    # ========================================================
+    # --------------------------------------------------------
     # FOOTER
-    # ========================================================
+    # --------------------------------------------------------
 
     st.divider()
 
     st.caption(
-        "ValueBet Football Pro V6.4 — "
-        "Probabilidades sin cuotas ficticias."
+        "ValueBet Football Pro V6.5"
     )
 
-
-# ============================================================
-# RUN
-# ============================================================
 
 if __name__ == "__main__":
     main()
