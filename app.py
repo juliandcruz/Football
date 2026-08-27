@@ -4,6 +4,7 @@ import numpy as np
 from datetime import datetime, timedelta
 import requests
 import math
+import os
 
 st.set_page_config(
     page_title="ValueBet Football Pro",
@@ -38,6 +39,35 @@ def poisson_prob_over(expected_value, line):
     return prob_over
 
 @st.cache_data(ttl=3600)
+def load_historical_csv_stats():
+    """Carga estadísticas de temporadas pasadas desde un archivo CSV local si existe"""
+    historical_stats = {}
+    csv_file = "historico_liga.csv"
+    
+    if os.path.exists(csv_file):
+        try:
+            df_hist = pd.read_csv(csv_file)
+            # Formato estándar de football-data.co.uk: HomeTeam, AwayTeam, FTHG, FTAG
+            if {'HomeTeam', 'AwayTeam', 'FTHG', 'FTAG'}.issubset(df_hist.columns):
+                for team in pd.concat([df_hist['HomeTeam'], df_hist['AwayTeam']]).unique():
+                    home_games = df_hist[df_hist['HomeTeam'] == team]
+                    away_games = df_hist[df_hist['AwayTeam'] == team]
+                    
+                    h_gf = home_games['FTHG'].mean() if not home_games.empty else 1.3
+                    h_ga = home_games['FTAG'].mean() if not home_games.empty else 1.3
+                    a_gf = away_games['FTAG'].mean() if not away_games.empty else 1.1
+                    a_ga = away_games['FTHG'].mean() if not away_games.empty else 1.3
+                    
+                    historical_stats[team] = {
+                        "home_gf": h_gf, "home_ga": h_ga,
+                        "away_gf": a_gf, "away_ga": a_ga
+                    }
+        except Exception as e:
+            pass
+            
+    return historical_stats
+
+@st.cache_data(ttl=3600)
 def load_multimarket_data(competition="PD"):
     try:
         api_key = st.secrets["FOOTBALL_DATA_API_KEY"]
@@ -55,13 +85,13 @@ def load_multimarket_data(competition="PD"):
         
         matches_data = resp_matches.json().get("matches", [])
         
-        # Extraer estadísticas detalladas de Local y Visitante de la API
+        # 1. Cargar datos de la API (Temporada actual)
         team_stats = {}
         resp_standings = requests.get(standings_url, headers=headers, timeout=10)
         if resp_standings.status_code == 200:
             standings_data = resp_standings.json().get("standings", [])
             for st_type in standings_data:
-                table_type = st_type.get("type") # "TOTAL", "HOME", "AWAY"
+                table_type = st_type.get("type") 
                 if table_type in ["HOME", "AWAY"]:
                     for row in st_type.get("table", []):
                         t_name = row["team"]["name"]
@@ -78,6 +108,9 @@ def load_multimarket_data(competition="PD"):
                         else:
                             team_stats[t_name]["away_gf"] = gf
                             team_stats[t_name]["away_ga"] = ga
+
+        # 2. Cargar datos históricos de respaldo (CSV)
+        hist_stats = load_historical_csv_stats()
         
         league_avg_goals = 1.3
         parsed_data = []
@@ -99,16 +132,20 @@ def load_multimarket_data(competition="PD"):
                 match_date_obj = datetime.now().date()
                 match_time = ""
 
-            # Obtener estadísticas específicas de Local/Visitante con respaldo a la media de la liga
+            # Fusión inteligente: Si hay pocos partidos jugados esta temporada, ponderamos con el histórico del CSV
             h_data = team_stats.get(home, {})
+            h_hist = hist_stats.get(home, {})
+            
+            # Si no hay datos en la API, recurrimos al histórico del CSV o a la media de la liga
+            h_gf = h_data.get("home_gf", h_hist.get("home_gf", league_avg_goals))
+            h_ga = h_data.get("home_ga", h_hist.get("home_ga", league_avg_goals))
+            
             a_data = team_stats.get(away, {})
+            a_hist = hist_stats.get(away, {})
             
-            h_gf = h_data.get("home_gf", league_avg_goals)
-            h_ga = h_data.get("home_ga", league_avg_goals)
-            a_gf = a_data.get("away_gf", league_avg_goals)
-            a_ga = a_data.get("away_ga", league_avg_goals)
+            a_gf = a_data.get("away_gf", a_hist.get("away_gf", league_avg_goals))
+            a_ga = a_data.get("away_ga", a_hist.get("away_ga", league_avg_goals))
             
-            # Modelo avanzado: Ataque Local vs Defensa Visitante, y Ataque Visitante vs Defensa Local
             home_exp_g = (h_gf + a_ga) / 2
             away_exp_g = (a_gf + h_ga) / 2
             
@@ -187,7 +224,7 @@ def main():
     tab_top, tab_matches, tab_sim = st.tabs(["🔥 Top Value por Fecha", "📅 Partidos y Mercados", "💰 Simulador"])
 
     with tab_top:
-        st.caption(f"{competitions[liga_seleccionada]['emblem']} Pronósticos basados en rendimiento real de Local y Visitante (Prob > 45%)")
+        st.caption(f"{competitions[liga_seleccionada]['emblem']} Pronósticos basados en rendimiento actual + histórico CSV (Prob > 45%)")
         
         col_date, col_info = st.columns([2, 3])
         with col_date:
@@ -285,7 +322,7 @@ def main():
             st.success(f"Sugerencia para la mejor oportunidad ({s.home} vs {s.away}): **€{stake:.2f}** ({stake/bank*100:.1f}% de tu bank).")
 
     st.divider()
-    st.caption("ValueBet Football Pro V7.0 — Advanced Home/Away Statistical Engine")
+    st.caption("ValueBet Football Pro V8.0 — Hybrid API + CSV Historical Engine")
 
 if __name__ == "__main__":
     main()
