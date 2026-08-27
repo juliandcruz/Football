@@ -41,11 +41,12 @@ def poisson_prob_over(expected_value, line):
 TEAM_MAPPING_PD = {
     "Athletic Club": "Ath Bilbao",
     "Atlético de Madrid": "Ath Madrid",
+    "Club Atlético de Madrid": "Ath Madrid",
     "Real Sociedad de Fútbol": "Sociedad",
     "Real Sociedad": "Sociedad",
     "Rayo Vallecano de Madrid": "Vallecano",
     "Rayo Vallecano": "Vallecano",
-    "RCD Espanyol Barcelona": "Espanol",
+    "RCD Espanyol de Barcelona": "Espanol",
     "RCD Espanyol": "Espanol",
     "RCD Mallorca": "Mallorca",
     "RC Celta de Vigo": "Celta",
@@ -64,7 +65,12 @@ TEAM_MAPPING_PD = {
     "UD Las Palmas": "Las Palmas",
     "CD Leganés": "Leganes",
     "Real Madrid CF": "Real Madrid",
-    "FC Barcelona": "Barcelona"
+    "FC Barcelona": "Barcelona",
+    "Elche CF": "Elche",
+    "Levante UD": "Levante",
+    "Málaga CF": "Malaga",
+    "Real Racing Club de Santander": "Santander",
+    "RC Deportivo La Coruña": "La Coruna"
 }
 
 @st.cache_data(ttl=3600)
