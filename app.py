@@ -38,42 +38,35 @@ def poisson_prob_over(expected_value, line):
     prob_over = max(0.01, min(0.99, 1 - prob_under))
     return prob_over
 
-@st.cache_data(ttl=3600)
-def load_historical_csv_stats(competition="PD"):
-    """Carga estadísticas históricas dinámicamente según la competición seleccionada"""
-    historical_stats = {}
-    csv_file = f"historico_{competition}.csv"
-    
-    if competition == "PD" and not os.path.exists(csv_file) and os.path.exists("historico_liga.csv"):
-        csv_file = "historico_liga.csv"
-
-    if os.path.exists(csv_file):
-        try:
-            df_hist = pd.read_csv(csv_file, encoding='latin1')
-            
-            if {'HomeTeam', 'AwayTeam', 'FTHG', 'FTAG'}.issubset(df_hist.columns):
-                for team in pd.concat([df_hist['HomeTeam'], df_hist['AwayTeam']]).unique():
-                    home_games = df_hist[df_hist['HomeTeam'] == team]
-                    away_games = df_hist[df_hist['AwayTeam'] == team]
-                    
-                    h_gf = home_games['FTHG'].mean() if not home_games.empty else 1.3
-                    h_ga = home_games['FTAG'].mean() if not home_games.empty else 1.3
-                    a_gf = away_games['FTAG'].mean() if not away_games.empty else 1.1
-                    a_ga = away_games['FTHG'].mean() if not away_games.empty else 1.3
-                    
-                    historical_stats[team] = {
-                        "home_gf": h_gf, "home_ga": h_ga,
-                        "away_gf": a_gf, "away_ga": a_ga
-                    }
-                st.sidebar.success(f"📂 Histórico ({competition}) cargado: {len(historical_stats)} equipos.")
-            else:
-                st.sidebar.error("❌ El CSV no tiene las columnas requeridas (HomeTeam, AwayTeam, FTHG, FTAG).")
-        except Exception as e:
-            st.sidebar.error(f"❌ Error al leer el CSV: {str(e)}")
-    else:
-        st.sidebar.warning(f"⚠️ No se encontró el archivo {csv_file}")
-            
-    return historical_stats
+# Diccionario de normalización para asegurar cruce exacto con historico_PD.csv
+TEAM_MAPPING_PD = {
+    "Athletic Club": "Ath Bilbao",
+    "Atlético de Madrid": "Ath Madrid",
+    "Real Sociedad de Fútbol": "Sociedad",
+    "Real Sociedad": "Sociedad",
+    "Rayo Vallecano de Madrid": "Vallecano",
+    "Rayo Vallecano": "Vallecano",
+    "RCD Espanyol Barcelona": "Espanol",
+    "RCD Espanyol": "Espanol",
+    "RCD Mallorca": "Mallorca",
+    "RC Celta de Vigo": "Celta",
+    "Celta de Vigo": "Celta",
+    "CA Osasuna": "Osasuna",
+    "Deportivo Alavés": "Alaves",
+    "Alavés": "Alaves",
+    "Real Valladolid CF": "Valladolid",
+    "Getafe CF": "Getafe",
+    "Valencia CF": "Valencia",
+    "Villarreal CF": "Villarreal",
+    "Real Betis Balompié": "Betis",
+    "Real Betis": "Betis",
+    "Sevilla FC": "Sevilla",
+    "Girona FC": "Girona",
+    "UD Las Palmas": "Las Palmas",
+    "CD Leganés": "Leganes",
+    "Real Madrid CF": "Real Madrid",
+    "FC Barcelona": "Barcelona"
+}
 
 @st.cache_data(ttl=3600)
 def load_multimarket_data(competition="PD"):
@@ -130,16 +123,17 @@ def load_multimarket_data(competition="PD"):
 
             h_gf, h_ga, a_gf, a_ga = league_avg_goals, league_avg_goals, league_avg_goals, league_avg_goals
 
-            # 2. Búsqueda inteligente y flexible en el CSV histórico
+            # 2. Mapeo y búsqueda robusta en el CSV histórico
             if not df_hist.empty and {'HomeTeam', 'AwayTeam', 'FTHG', 'FTAG'}.issubset(df_hist.columns):
-                home_clean = home.replace("CF", "").replace("FC", "").strip()
-                away_clean = away.replace("CF", "").replace("FC", "").strip()
+                # Traducir nombres de la API a los nombres del CSV si estamos en La Liga
+                csv_home = TEAM_MAPPING_PD.get(home, home)
+                csv_away = TEAM_MAPPING_PD.get(away, away)
 
-                home_games = df_hist[df_hist['HomeTeam'].str.contains(home_clean, case=False, na=False)]
-                away_games_as_home = df_hist[df_hist['AwayTeam'].str.contains(home_clean, case=False, na=False)]
+                home_games = df_hist[df_hist['HomeTeam'].str.lower() == csv_home.lower()]
+                away_games_as_home = df_hist[df_hist['AwayTeam'].str.lower() == csv_home.lower()]
                 
-                away_games = df_hist[df_hist['AwayTeam'].str.contains(away_clean, case=False, na=False)]
-                home_games_as_away = df_hist[df_hist['HomeTeam'].str.contains(away_clean, case=False, na=False)]
+                away_games = df_hist[df_hist['AwayTeam'].str.lower() == csv_away.lower()]
+                home_games_as_away = df_hist[df_hist['HomeTeam'].str.lower() == csv_away.lower()]
 
                 if not home_games.empty or not away_games_as_home.empty:
                     hg_list, ha_list = [], []
@@ -247,7 +241,7 @@ def main():
     tab_top, tab_matches, tab_sim = st.tabs(["🔥 Top Value por Fecha", "📅 Partidos y Mercados", "💰 Simulador"])
 
     with tab_top:
-        st.caption(f"{competitions[liga_seleccionada]['emblem']} Pronósticos basados en histórico flexible (Prob > 38%)")
+        st.caption(f"{competitions[liga_seleccionada]['emblem']} Pronósticos basados en histórico oficial (Prob > 38%)")
         
         col_date, col_info = st.columns([2, 3])
         with col_date:
@@ -345,7 +339,7 @@ def main():
             st.success(f"Sugerencia para la mejor oportunidad ({s.home} vs {s.away}): **€{stake:.2f}** ({stake/bank*100:.1f}% de tu bank).")
 
     st.divider()
-    st.caption("ValueBet Football Pro V8.6 — Flexible Historical Engine")
+    st.caption("ValueBet Football Pro V8.7 — Mapped Historical Engine")
 
 if __name__ == "__main__":
     main()
