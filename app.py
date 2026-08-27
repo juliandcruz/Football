@@ -2496,12 +2496,24 @@ def main():
         )
 
         current_year = date.today().year
+        # Las temporadas europeas van de ago a may.
+        # De ene-may estamos en la 2ª mitad de la temporada
+        # que empezó el año anterior.
+        current_month = date.today().month
+        default_season = (
+            current_year - 1
+            if current_month <= 5
+            else current_year
+        )
         season_options = list(range(current_year, current_year - 5, -1))
+        default_index = 0
+        if default_season in season_options:
+            default_index = season_options.index(default_season)
 
         season = st.selectbox(
             "Temporada disponible",
             season_options,
-            index=0
+            index=default_index
         )
 
         st.divider()
@@ -2544,23 +2556,30 @@ def main():
         ]
     )
 
-    # Solo se permiten datos de los 2 años anteriores.
-    # Se solicitan las temporadas necesarias para cubrir esa ventana.
-    current_season = season
-    historical_seasons = [
-        current_season,
-        current_season - 1,
-        current_season - 2
-    ]
-
     # --------------------------------------------------------
     # CARGA JORNADAS
     # --------------------------------------------------------
 
-    rounds, round_error = get_rounds(
-        league_id,
-        season
-    )
+    # Se intenta con la temporada seleccionada;
+    # si falla o viene vacía, se hace fallback
+    # a la temporada anterior automáticamente.
+    seasons_to_try = [season]
+    if season - 1 not in seasons_to_try:
+        seasons_to_try.append(season - 1)
+
+    rounds = []
+    round_error = None
+    effective_season = season
+
+    for s in seasons_to_try:
+        rounds, round_error = get_rounds(
+            league_id,
+            s
+        )
+        if not round_error and rounds:
+            effective_season = s
+            break
+        rounds = []
 
     if round_error:
 
@@ -2580,6 +2599,22 @@ def main():
         )
 
         return
+
+    if effective_season != season:
+        st.info(
+            f"No se encontraron jornadas para "
+            f"la temporada {season}. Se muestran "
+            f"las de la temporada {effective_season}."
+        )
+
+    # Solo se permiten datos de los 2 años anteriores.
+    # Se solicitan las temporadas necesarias para cubrir esa ventana.
+    current_season = effective_season
+    historical_seasons = [
+        current_season,
+        current_season - 1,
+        current_season - 2
+    ]
 
     rounds = sorted(
         rounds,
@@ -2630,7 +2665,7 @@ def main():
         fixtures, error = (
             get_fixtures_by_round(
                 league_id,
-                season,
+                current_season,
                 selected_round
             )
         )
@@ -2804,7 +2839,7 @@ def main():
         fixtures_df, error = (
             load_round_fixtures(
                 league_id,
-                season,
+                current_season,
                 round_to_show
             )
         )
