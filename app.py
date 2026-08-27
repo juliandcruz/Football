@@ -96,7 +96,6 @@ def load_multimarket_data(competition="PD"):
             h_s, a_s = 4.5, 4.0
 
             if not df_hist.empty and {'HomeTeam', 'AwayTeam', 'FTHG', 'FTAG'}.issubset(df_hist.columns):
-                # Búsqueda parcial inteligente para evitar problemas de nombres exactos
                 h_term = home.split()[0].lower()
                 a_term = away.split()[0].lower()
                 if len(h_term) <= 2 and len(home.split()) > 1:
@@ -158,7 +157,6 @@ def load_multimarket_data(competition="PD"):
             exp_cards = max(1.5, h_y + a_y)
             exp_shots = max(3.0, h_s + a_s)
 
-            # Variación real basada en los goles esperados únicos de cada encuentro
             rand_factor = (hash(home + away) % 15) / 100.0
             
             prob_goals = poisson_prob_over(total_exp_goals, 2.5)
@@ -168,7 +166,7 @@ def load_multimarket_data(competition="PD"):
             
             prob_corners = poisson_prob_over(exp_corners, 9.5)
             fair_c = 1 / prob_corners
-            odds_c = round(fair_c * (0.92 + (rand_factor/2), 2) if 'fair_c' else 1.95, 2)
+            odds_c = round(fair_c * (0.92 + (rand_factor / 2)), 2)
             ev_c = (prob_corners * odds_c) - 1
 
             prob_cards = poisson_prob_over(exp_cards, 4.5)
@@ -320,7 +318,7 @@ def main():
             st.success(f"Sugerencia para la mejor oportunidad ({s.home} vs {s.away}): **€{stake:.2f}** ({stake/bank*100:.1f}% de tu bank).")
 
     st.divider()
-    st.caption("ValueBet Football Pro V9.0 — Smart Fuzzy Search Engine")
+    st.caption("ValueBet Football Pro V9.1 — Fixed Syntax Engine")
 
 if __name__ == "__main__":
     main()
