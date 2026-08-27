@@ -6,7 +6,6 @@ import requests
 import math
 from pathlib import Path
 
-
 # ============================================================
 # CONFIGURACIÓN
 # ============================================================
@@ -18,9 +17,8 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-
 # ============================================================
-# ESTILO PROFESIONAL
+# ESTILO
 # ============================================================
 
 st.markdown("""
@@ -30,25 +28,6 @@ st.markdown("""
     max-width: 1150px;
     padding: 1rem .8rem 4rem .8rem;
 }
-
-/* Header */
-
-.app-header {
-    padding: 4px 0 18px 0;
-}
-
-.app-title {
-    font-size: 2rem;
-    font-weight: 800;
-    letter-spacing: -0.5px;
-}
-
-.app-subtitle {
-    opacity: .60;
-    font-size: .85rem;
-}
-
-/* Cards */
 
 .value-card {
     border: 1px solid rgba(128,128,128,.18);
@@ -158,7 +137,7 @@ hr {
 # ============================================================
 
 MIN_PROBABILITY = 0.45
-DEFAULT_LEAGUE_GOALS = 2.60
+
 DEFAULT_CORNERS = 9.5
 DEFAULT_CARDS = 4.5
 DEFAULT_SOT = 8.5
@@ -234,9 +213,7 @@ def expected_value(probability, odds):
 
 def edge_probability(probability, odds):
 
-    implied = implied_probability(
-        odds
-    )
+    implied = implied_probability(odds)
 
     if pd.isna(implied):
         return np.nan
@@ -247,8 +224,8 @@ def edge_probability(probability, odds):
 def kelly_fraction(
     probability,
     odds,
-    fraction=.25,
-    maximum=.02
+    fraction=0.25,
+    maximum=0.02
 ):
 
     if pd.isna(odds) or odds <= 1:
@@ -316,16 +293,14 @@ def parse_date(value):
 @st.cache_data(ttl=300)
 def load_real_odds():
 
-    path = Path(
-        "data/odds.csv"
-    )
+    path = Path("data/odds.csv")
 
     if not path.exists():
         return pd.DataFrame()
 
     try:
 
-        df = pd.read_csv(path)
+        odds_df = pd.read_csv(path)
 
         required = [
             "home",
@@ -336,18 +311,18 @@ def load_real_odds():
         ]
 
         if not all(
-            col in df.columns
+            col in odds_df.columns
             for col in required
         ):
             return pd.DataFrame()
 
-        df["odds"] = pd.to_numeric(
-            df["odds"],
+        odds_df["odds"] = pd.to_numeric(
+            odds_df["odds"],
             errors="coerce"
         )
 
-        return df[
-            df["odds"] > 1
+        return odds_df[
+            odds_df["odds"] > 1
         ].copy()
 
     except Exception:
@@ -407,6 +382,7 @@ def get_real_odds(
     bookmaker = ""
 
     if "bookmaker" in matches.columns:
+
         bookmaker = str(
             row["bookmaker"]
         )
@@ -418,7 +394,7 @@ def get_real_odds(
 
 
 # ============================================================
-# API FOOTBALL DATA
+# API FOOTBALL-DATA.ORG
 # ============================================================
 
 @st.cache_data(ttl=3600)
@@ -590,9 +566,9 @@ def load_data(competition):
                 }
             )
 
-            # -----------------------------------------------
-            # GOLES
-            # -----------------------------------------------
+            # =================================================
+            # MODELO DE GOLES
+            # =================================================
 
             home_xg = (
                 h["gf"] + a["ga"]
@@ -616,9 +592,9 @@ def load_data(competition):
                 2.5
             )
 
-            # -----------------------------------------------
-            # CÓRNERS
-            # -----------------------------------------------
+            # =================================================
+            # MODELO DE CÓRNERS
+            # =================================================
 
             expected_corners = (
                 DEFAULT_CORNERS
@@ -643,18 +619,18 @@ def load_data(competition):
                 9.5
             )
 
-            # -----------------------------------------------
-            # TARJETAS
-            # -----------------------------------------------
+            # =================================================
+            # MODELO DE TARJETAS
+            # =================================================
 
             p_cards = poisson_prob_over(
                 DEFAULT_CARDS,
                 4.5
             )
 
-            # -----------------------------------------------
-            # TIROS A PUERTA
-            # -----------------------------------------------
+            # =================================================
+            # MODELO DE TIROS A PUERTA
+            # =================================================
 
             expected_sot = (
                 DEFAULT_SOT
@@ -718,14 +694,12 @@ def load_data(competition):
                 if probability < MIN_PROBABILITY:
                     continue
 
-                odds, bookmaker = (
-                    get_real_odds(
-                        odds_df,
-                        home,
-                        away,
-                        code,
-                        line
-                    )
+                odds, bookmaker = get_real_odds(
+                    odds_df,
+                    home,
+                    away,
+                    code,
+                    line
                 )
 
                 fair = fair_odds(
@@ -772,7 +746,7 @@ def load_data(competition):
 
             return (
                 pd.DataFrame(),
-                "No hay datos."
+                "No hay partidos disponibles."
             )
 
         columns = [
@@ -818,7 +792,7 @@ def load_data(competition):
 
 
 # ============================================================
-# CARD DE VALUE
+# TARJETA DE APUESTA
 # ============================================================
 
 def render_value_card(row):
@@ -837,6 +811,7 @@ def render_value_card(row):
 
         odds_text = "—"
         ev_text = "—"
+
         badge = (
             '<span class="no-odds-badge">'
             'SIN CUOTA'
@@ -1023,21 +998,21 @@ def render_value_card(row):
 
 
 # ============================================================
-# APP
+# APP PRINCIPAL
 # ============================================================
 
 def main():
 
-    # --------------------------------------------------------
-    # HEADER
-    # --------------------------------------------------------
+    # ========================================================
+    # HEADER CORREGIDO
+    # ========================================================
 
     st.title("⚽ ValueBet Pro")
-st.caption("Análisis de mercados de fútbol")
+    st.caption("Análisis de mercados de fútbol")
 
-    # --------------------------------------------------------
-    # CONFIG
-    # --------------------------------------------------------
+    # ========================================================
+    # COMPETICIONES
+    # ========================================================
 
     competitions = {
 
@@ -1085,9 +1060,9 @@ st.caption("Análisis de mercados de fútbol")
         league_name
     ]
 
-    # --------------------------------------------------------
-    # DATOS
-    # --------------------------------------------------------
+    # ========================================================
+    # CARGAR DATOS
+    # ========================================================
 
     df, message = load_data(
         competition
@@ -1105,9 +1080,9 @@ st.caption("Análisis de mercados de fútbol")
         df["probability"] * 100
     )
 
-    # --------------------------------------------------------
-    # TABS
-    # --------------------------------------------------------
+    # ========================================================
+    # PESTAÑAS
+    # ========================================================
 
     (
         tab_top,
@@ -1144,7 +1119,8 @@ st.caption("Análisis de mercados de fútbol")
             df["date_obj"] == selected_date
         ].copy()
 
-        # Solo apuestas con cuota real
+        # Solo mostramos value cuando hay cuota real
+
         value = day[
             day["odds"].notna()
         ].copy()
@@ -1205,6 +1181,7 @@ st.caption("Análisis de mercados de fútbol")
         for _, match in matches.iterrows():
 
             home = match["home"]
+
             away = match["away"]
 
             subset = df[
@@ -1295,24 +1272,22 @@ st.caption("Análisis de mercados de fútbol")
 
             st.success(
                 f"""
-                **{best["home"]} vs
-                {best["away"]}**
+**{best["home"]} vs {best["away"]}**
 
-                {best["market"]}
-                {best["line"]}
+{best["market"]} {best["line"]}
 
-                Probabilidad:
-                **{best["probability"]*100:.1f}%**
+Probabilidad:
+**{best["probability"]*100:.1f}%**
 
-                Cuota:
-                **{best["odds"]:.2f}**
+Cuota:
+**{best["odds"]:.2f}**
 
-                EV:
-                **{best["ev"]*100:+.1f}%**
+EV:
+**{best["ev"]*100:+.1f}%**
 
-                Stake orientativo:
-                **€{stake:.2f}**
-                """
+Stake orientativo:
+**€{stake:.2f}**
+"""
             )
 
             st.caption(
@@ -1321,16 +1296,20 @@ st.caption("Análisis de mercados de fútbol")
                 "estimado no garantiza beneficio."
             )
 
-    # --------------------------------------------------------
+    # ========================================================
     # FOOTER
-    # --------------------------------------------------------
+    # ========================================================
 
     st.divider()
 
     st.caption(
-        "ValueBet Football Pro V6.5"
+        "ValueBet Football Pro V6.5.1"
     )
 
+
+# ============================================================
+# EJECUCIÓN
+# ============================================================
 
 if __name__ == "__main__":
     main()
