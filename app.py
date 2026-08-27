@@ -107,7 +107,12 @@ def load_multimarket_data(competition="PD"):
             away = m["awayTeam"]["name"]
             home_crest = m["homeTeam"].get("crest", "")
             away_crest = m["awayTeam"].get("crest", "")
+
+            st.write(f"API -> Local: {home} | Visitante: {away}")
+            # ------------------------
             
+            home_crest = m["homeTeam"].get("crest", "")
+            away_crest = m["awayTeam"].get("crest", "")
             utc_date = m.get("utcDate", "")
             try:
                 dt = datetime.strptime(utc_date, "%Y-%m-%dT%H:%M:%SZ")
