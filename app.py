@@ -1,9 +1,8 @@
 import streamlit as st
 import pandas as pd
 import requests
-import math
 import re
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from collections import defaultdict
 
 
@@ -12,7 +11,7 @@ from collections import defaultdict
 # ============================================================
 
 st.set_page_config(
-    page_title="ValueBet Pro V7",
+    page_title="ValueBet Pro V7.2",
     page_icon="⚽",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -20,21 +19,21 @@ st.set_page_config(
 
 
 # ============================================================
-# ESTILO
+# CSS
 # ============================================================
 
 st.markdown("""
 <style>
 
 .block-container {
-    max-width: 1180px;
+    max-width: 1200px;
     padding: 1rem .65rem 4rem .65rem;
 }
 
 .app-title {
-    font-size: 1.75rem;
+    font-size: 1.8rem;
     font-weight: 850;
-    margin-bottom: 2px;
+    letter-spacing: -.5px;
 }
 
 .app-subtitle {
@@ -43,92 +42,108 @@ st.markdown("""
     margin-bottom: 18px;
 }
 
-.round-header {
-    border: 1px solid rgba(128,128,128,.18);
-    background: rgba(128,128,128,.045);
-    border-radius: 16px;
-    padding: 13px 15px;
-    margin-top: 16px;
+.section-title {
+    font-size: 1.25rem;
+    font-weight: 800;
+    margin-top: 8px;
     margin-bottom: 10px;
 }
 
+.round-card {
+    border: 1px solid rgba(128,128,128,.18);
+    border-radius: 16px;
+    padding: 13px 15px;
+    margin-top: 18px;
+    margin-bottom: 10px;
+    background: rgba(128,128,128,.045);
+}
+
 .round-title {
-    font-size: 1.08rem;
+    font-size: 1.05rem;
     font-weight: 800;
 }
 
-.round-info {
-    font-size: .74rem;
+.round-subtitle {
+    font-size: .73rem;
     opacity: .55;
     margin-top: 3px;
 }
 
 .match-card {
     border: 1px solid rgba(128,128,128,.15);
-    border-radius: 15px;
+    border-radius: 14px;
     padding: 13px;
     margin-bottom: 9px;
     background: rgba(128,128,128,.025);
 }
 
-.match-time {
-    font-size: .76rem;
+.match-date {
+    font-size: .74rem;
     opacity: .55;
     margin-bottom: 9px;
 }
 
-.team {
+.team-name {
     font-size: .95rem;
     font-weight: 750;
 }
 
 .vs {
+    font-size: .7rem;
     opacity: .35;
-    font-size: .75rem;
     font-weight: 800;
+    text-align: center;
 }
 
-.status {
-    font-size: .68rem;
-    opacity: .55;
+.info-card {
+    border: 1px solid rgba(128,128,128,.14);
+    border-radius: 14px;
+    padding: 14px;
+    margin-bottom: 10px;
+    background: rgba(128,128,128,.035);
 }
 
 .market-card {
     border: 1px solid rgba(128,128,128,.13);
-    border-radius: 12px;
-    padding: 12px;
-    margin-bottom: 8px;
+    border-radius: 11px;
+    padding: 11px;
+    margin-bottom: 7px;
 }
 
-.value-badge {
+.badge {
+    display: inline-block;
+    border-radius: 7px;
+    padding: 3px 7px;
+    font-size: .68rem;
+    font-weight: 750;
+}
+
+.badge-green {
     background: rgba(46,204,113,.14);
     color: #2ecc71;
-    border-radius: 7px;
-    padding: 4px 8px;
-    font-size: .7rem;
-    font-weight: 800;
 }
 
-.no-value-badge {
-    background: rgba(128,128,128,.12);
-    border-radius: 7px;
-    padding: 4px 8px;
-    font-size: .7rem;
-    font-weight: 700;
+.badge-gray {
+    background: rgba(128,128,128,.13);
 }
 
 .no-data {
-    padding: 10px;
+    padding: 11px;
     border-radius: 10px;
     background: rgba(128,128,128,.06);
     font-size: .8rem;
     opacity: .7;
 }
 
+.small {
+    font-size: .72rem;
+    opacity: .55;
+}
+
 .metric {
-    background: rgba(128,128,128,.06);
+    background: rgba(128,128,128,.055);
     border-radius: 10px;
-    padding: 8px;
+    padding: 9px;
     text-align: center;
 }
 
@@ -142,11 +157,6 @@ st.markdown("""
     font-weight: 800;
 }
 
-.source {
-    font-size: .68rem;
-    opacity: .45;
-}
-
 </style>
 """, unsafe_allow_html=True)
 
@@ -157,27 +167,27 @@ st.markdown("""
 
 COMPETITIONS = {
     "🇪🇸 La Liga": {
-        "api_football": 140,
+        "api_id": 140,
         "football_data": "PD",
     },
     "🇬🇧 Premier League": {
-        "api_football": 39,
+        "api_id": 39,
         "football_data": "PL",
     },
     "🇮🇹 Serie A": {
-        "api_football": 135,
+        "api_id": 135,
         "football_data": "SA",
     },
     "🇩🇪 Bundesliga": {
-        "api_football": 78,
+        "api_id": 78,
         "football_data": "BL1",
     },
     "🇫🇷 Ligue 1": {
-        "api_football": 61,
+        "api_id": 61,
         "football_data": "FL1",
     },
     "🇪🇺 Champions League": {
-        "api_football": 2,
+        "api_id": 2,
         "football_data": "CL",
     },
 }
@@ -205,61 +215,66 @@ def get_secret(name):
 # API-FOOTBALL
 # ============================================================
 
-API_FOOTBALL_BASE = (
+API_FOOTBALL_URL = (
     "https://v3.football.api-sports.io"
 )
 
 
-def api_football_get(
+def api_football(
     endpoint,
     params=None
 ):
 
-    key = get_secret(
+    api_key = get_secret(
         "API_FOOTBALL_KEY"
     )
 
-    if not key:
-
+    if not api_key:
         return None, (
-            "No existe API_FOOTBALL_KEY "
+            "Falta API_FOOTBALL_KEY "
             "en Streamlit Secrets."
         )
 
     headers = {
-        "x-apisports-key": key
+        "x-apisports-key": api_key
     }
 
     try:
 
         response = requests.get(
-            API_FOOTBALL_BASE + endpoint,
+            API_FOOTBALL_URL + endpoint,
             headers=headers,
             params=params or {},
             timeout=20,
         )
 
-        if response.status_code != 200:
-
+        try:
+            data = response.json()
+        except Exception:
             return None, (
-                f"API-Football HTTP "
-                f"{response.status_code}"
+                f"Respuesta no válida "
+                f"HTTP {response.status_code}"
             )
 
-        data = response.json()
+        if response.status_code != 200:
+            return None, str(
+                data.get(
+                    "errors",
+                    f"HTTP {response.status_code}"
+                )
+            )
 
-        errors = data.get(
-            "errors"
-        )
+        errors = data.get("errors")
 
         if errors:
-
             return None, str(errors)
 
         return data, None
 
-    except Exception as e:
+    except requests.exceptions.Timeout:
+        return None, "Timeout de API-Football."
 
+    except Exception as e:
         return None, str(e)
 
 
@@ -267,52 +282,52 @@ def api_football_get(
 # FOOTBALL-DATA.ORG
 # ============================================================
 
-FOOTBALL_DATA_BASE = (
+FOOTBALL_DATA_URL = (
     "https://api.football-data.org/v4"
 )
 
 
-def football_data_get(
+def football_data(
     endpoint,
     params=None
 ):
 
-    key = get_secret(
+    api_key = get_secret(
         "FOOTBALL_DATA_API_KEY"
     )
 
-    if not key:
-
+    if not api_key:
         return None, (
-            "No existe "
-            "FOOTBALL_DATA_API_KEY "
+            "Falta FOOTBALL_DATA_API_KEY "
             "en Streamlit Secrets."
         )
 
     headers = {
-        "X-Auth-Token": key
+        "X-Auth-Token": api_key
     }
 
     try:
 
         response = requests.get(
-            FOOTBALL_DATA_BASE + endpoint,
+            FOOTBALL_DATA_URL + endpoint,
             headers=headers,
             params=params or {},
             timeout=20,
         )
 
-        if response.status_code != 200:
+        data = response.json()
 
-            return None, (
-                f"football-data.org HTTP "
-                f"{response.status_code}"
+        if response.status_code != 200:
+            return None, str(
+                data.get(
+                    "message",
+                    f"HTTP {response.status_code}"
+                )
             )
 
-        return response.json(), None
+        return data, None
 
     except Exception as e:
-
         return None, str(e)
 
 
@@ -320,7 +335,7 @@ def football_data_get(
 # FECHAS
 # ============================================================
 
-def parse_datetime(value):
+def parse_date(value):
 
     if not value:
         return None
@@ -328,23 +343,19 @@ def parse_datetime(value):
     try:
 
         return datetime.fromisoformat(
-            value.replace(
-                "Z",
-                "+00:00"
-            )
+            value.replace("Z", "+00:00")
         )
 
     except Exception:
-
         return None
 
 
 def format_date(value):
 
-    dt = parse_datetime(value)
+    dt = parse_date(value)
 
     if not dt:
-        return "Sin fecha"
+        return "—"
 
     return dt.strftime(
         "%d/%m/%Y"
@@ -353,7 +364,7 @@ def format_date(value):
 
 def format_time(value):
 
-    dt = parse_datetime(value)
+    dt = parse_date(value)
 
     if not dt:
         return "—"
@@ -364,48 +375,58 @@ def format_time(value):
 
 
 # ============================================================
-# PRÓXIMOS PARTIDOS API-FOOTBALL
+# FIXTURES
 #
 # IMPORTANTE:
-# NO utilizamos /fixtures/rounds
-# NO enviamos season=2026
+# NO next
+# NO rounds
+# NO season
+#
+# Utilizamos from / to.
 # ============================================================
 
 @st.cache_data(ttl=600)
-def get_upcoming_fixtures(
+def get_fixtures_by_dates(
     league_id,
-    number=100
+    start_date,
+    end_date
 ):
 
-    data, error = api_football_get(
+    params = {
+        "league": league_id,
+        "from": start_date,
+        "to": end_date,
+    }
+
+    data, error = api_football(
         "/fixtures",
-        {
-            "league": league_id,
-            "next": number,
-        }
+        params
     )
 
     if error:
         return [], error
 
-    fixtures = data.get(
+    return data.get(
         "response",
         []
-    )
-
-    return fixtures, None
+    ), None
 
 
 # ============================================================
-# NORMALIZAR PARTIDOS API-FOOTBALL
+# NORMALIZAR FIXTURE
 # ============================================================
 
-def normalize_api_fixture(
+def normalize_fixture(
     fixture
 ):
 
-    fixture_info = fixture.get(
+    info = fixture.get(
         "fixture",
+        {}
+    )
+
+    league = fixture.get(
+        "league",
         {}
     )
 
@@ -424,114 +445,100 @@ def normalize_api_fixture(
         {}
     )
 
-    league = fixture.get(
-        "league",
+    status = info.get(
+        "status",
         {}
     )
 
-    status = fixture_info.get(
-        "status",
+    venue = info.get(
+        "venue",
         {}
     )
 
     return {
 
         "fixture_id":
-        fixture_info.get(
-            "id"
-        ),
+            info.get("id"),
 
         "date_raw":
-        fixture_info.get(
-            "date"
-        ),
+            info.get("date"),
 
         "date":
-        format_date(
-            fixture_info.get(
-                "date"
-            )
-        ),
+            format_date(
+                info.get("date")
+            ),
 
         "time":
-        format_time(
-            fixture_info.get(
-                "date"
-            )
-        ),
+            format_time(
+                info.get("date")
+            ),
 
         "home":
-        home.get(
-            "name",
-            "Sin datos"
-        ),
+            home.get(
+                "name",
+                "Sin datos"
+            ),
 
         "away":
-        away.get(
-            "name",
-            "Sin datos"
-        ),
+            away.get(
+                "name",
+                "Sin datos"
+            ),
+
+        "home_id":
+            home.get("id"),
+
+        "away_id":
+            away.get("id"),
 
         "home_logo":
-        home.get(
-            "logo",
-            ""
-        ),
+            home.get("logo", ""),
 
         "away_logo":
-        away.get(
-            "logo",
-            ""
-        ),
+            away.get("logo", ""),
 
         "round":
-        league.get(
-            "round"
-        ),
+            league.get("round"),
+
+        "league":
+            league.get("name"),
 
         "season":
-        league.get(
-            "season"
-        ),
+            league.get("season"),
 
         "status":
-        status.get(
-            "short",
-            ""
-        ),
+            status.get("short"),
 
         "venue":
-        fixture_info.get(
-            "venue",
-            {}
-        ).get(
-            "name"
-        ),
+            venue.get("name"),
 
-        "source":
-        "API-Football",
+        "city":
+            venue.get("city"),
 
     }
 
 
 # ============================================================
-# AGRUPAR POR JORNADA
+# ORDENAR JORNADAS
 # ============================================================
 
-def round_number(
-    value
+def round_sort_key(
+    round_name
 ):
 
-    if not value:
+    if not round_name:
         return 9999
+
+    text = str(
+        round_name
+    )
 
     match = re.search(
         r"(\d+)",
-        str(value)
+        text
     )
 
     if match:
-
         return int(
             match.group(1)
         )
@@ -539,64 +546,56 @@ def round_number(
     return 9999
 
 
-def group_by_round(
+def group_rounds(
     fixtures
 ):
 
-    groups = defaultdict(
-        list
-    )
+    grouped = defaultdict(list)
 
     for fixture in fixtures:
 
-        normalized = (
-            normalize_api_fixture(
-                fixture
-            )
+        match = normalize_fixture(
+            fixture
         )
 
-        round_name = (
-            normalized["round"]
+        round_name = match.get(
+            "round"
         )
 
         if not round_name:
-
             round_name = (
-                "Jornada no indicada por la API"
+                "Jornada no indicada"
             )
 
-        groups[
+        grouped[
             round_name
-        ].append(
-            normalized
-        )
+        ].append(match)
 
     return dict(
         sorted(
-            groups.items(),
-            key=lambda item:
-            round_number(
-                item[0]
-            )
+            grouped.items(),
+            key=lambda x:
+                round_sort_key(
+                    x[0]
+                )
         )
     )
 
 
 # ============================================================
-# FOOTBALL-DATA:
-# CALENDARIO COMPLEMENTARIO
+# FOOTBALL-DATA — CALENDARIO
 # ============================================================
 
 @st.cache_data(ttl=900)
-def get_football_data_matches(
-    competition_code
+def get_fd_matches(
+    competition
 ):
 
-    data, error = football_data_get(
+    data, error = football_data(
         f"/competitions/"
-        f"{competition_code}/matches",
+        f"{competition}/matches",
         {
-            "status": "SCHEDULED",
+            "status": "SCHEDULED"
         }
     )
 
@@ -612,55 +611,33 @@ def get_football_data_matches(
 
         rows.append({
 
-            "football_data_id":
-            match.get(
-                "id"
-            ),
-
-            "date_raw":
-            match.get(
-                "utcDate"
-            ),
+            "id":
+                match.get("id"),
 
             "date":
-            format_date(
-                match.get(
-                    "utcDate"
-                )
-            ),
-
-            "time":
-            format_time(
-                match.get(
-                    "utcDate"
-                )
-            ),
+                match.get("utcDate"),
 
             "home":
-            match.get(
-                "homeTeam",
-                {}
-            ).get(
-                "name"
-            ),
+                match.get(
+                    "homeTeam",
+                    {}
+                ).get("name"),
 
             "away":
-            match.get(
-                "awayTeam",
-                {}
-            ).get(
-                "name"
-            ),
+                match.get(
+                    "awayTeam",
+                    {}
+                ).get("name"),
 
             "matchday":
-            match.get(
-                "matchday"
-            ),
+                match.get(
+                    "matchday"
+                ),
 
             "status":
-            match.get(
-                "status"
-            ),
+                match.get(
+                    "status"
+                ),
 
         })
 
@@ -670,17 +647,17 @@ def get_football_data_matches(
 
 
 # ============================================================
-# CLASIFICACIÓN FOOTBALL-DATA
+# FOOTBALL-DATA — CLASIFICACIÓN
 # ============================================================
 
 @st.cache_data(ttl=1800)
-def get_standings(
-    competition_code
+def get_fd_standings(
+    competition
 ):
 
-    data, error = football_data_get(
+    data, error = football_data(
         f"/competitions/"
-        f"{competition_code}/standings"
+        f"{competition}/standings"
     )
 
     if error:
@@ -688,17 +665,17 @@ def get_standings(
 
     rows = []
 
-    for table in data.get(
+    for standing in data.get(
         "standings",
         []
     ):
 
-        if table.get(
+        if standing.get(
             "type"
         ) != "TOTAL":
             continue
 
-        for row in table.get(
+        for row in standing.get(
             "table",
             []
         ):
@@ -711,49 +688,31 @@ def get_standings(
             rows.append({
 
                 "Pos":
-                row.get(
-                    "position"
-                ),
+                    row.get("position"),
 
                 "Equipo":
-                team.get(
-                    "name"
-                ),
+                    team.get("name"),
 
                 "PJ":
-                row.get(
-                    "playedGames"
-                ),
+                    row.get("playedGames"),
 
                 "G":
-                row.get(
-                    "won"
-                ),
+                    row.get("won"),
 
                 "E":
-                row.get(
-                    "draw"
-                ),
+                    row.get("draw"),
 
                 "P":
-                row.get(
-                    "lost"
-                ),
+                    row.get("lost"),
 
                 "GF":
-                row.get(
-                    "goalsFor"
-                ),
+                    row.get("goalsFor"),
 
                 "GC":
-                row.get(
-                    "goalsAgainst"
-                ),
+                    row.get("goalsAgainst"),
 
                 "Pts":
-                row.get(
-                    "points"
-                ),
+                    row.get("points"),
 
             })
 
@@ -763,15 +722,15 @@ def get_standings(
 
 
 # ============================================================
-# API-FOOTBALL: PREDICCIONES OFICIALES DEL ENDPOINT
+# PREDICCIONES API-FOOTBALL
 # ============================================================
 
-@st.cache_data(ttl=600)
-def get_api_predictions(
+@st.cache_data(ttl=900)
+def get_prediction(
     fixture_id
 ):
 
-    data, error = api_football_get(
+    data, error = api_football(
         "/predictions",
         {
             "fixture": fixture_id
@@ -793,15 +752,15 @@ def get_api_predictions(
 
 
 # ============================================================
-# API-FOOTBALL: CUOTAS
+# CUOTAS API-FOOTBALL
 # ============================================================
 
-@st.cache_data(ttl=300)
-def get_fixture_odds(
+@st.cache_data(ttl=600)
+def get_odds(
     fixture_id
 ):
 
-    data, error = api_football_get(
+    data, error = api_football(
         "/odds",
         {
             "fixture": fixture_id
@@ -811,77 +770,38 @@ def get_fixture_odds(
     if error:
         return [], error
 
-    return (
-        data.get(
-            "response",
-            []
-        ),
-        None
-    )
+    return data.get(
+        "response",
+        []
+    ), None
 
 
 # ============================================================
-# PROBABILIDAD / EV
+# EXTRAER PREDICCIÓN
 # ============================================================
 
-def fair_odds(
-    probability
-):
-
-    if (
-        probability is None
-        or probability <= 0
-    ):
-        return None
-
-    return 1 / probability
-
-
-def calculate_ev(
-    probability,
-    odds
-):
-
-    if (
-        probability is None
-        or odds is None
-        or odds <= 1
-    ):
-        return None
-
-    return (
-        probability * odds
-    ) - 1
-
-
-# ============================================================
-# PARSEAR PREDICCIÓN API-FOOTBALL
-# ============================================================
-
-def extract_prediction_data(
+def prediction_rows(
     prediction
 ):
 
     if not prediction:
-
         return []
 
-    predictions = (
-        prediction.get(
-            "predictions",
-            {}
-        )
+    p = prediction.get(
+        "predictions",
+        {}
     )
 
     rows = []
 
-    # Resultado 1X2
-
-    winner = predictions.get(
+    winner = p.get(
         "winner"
     )
 
-    if winner:
+    if isinstance(
+        winner,
+        dict
+    ):
 
         name = winner.get(
             "name"
@@ -893,249 +813,279 @@ def extract_prediction_data(
 
         if name:
 
-            rows.append({
+            rows.append(
+                (
+                    "🏆 Resultado",
+                    name,
+                    comment
+                )
+            )
 
-                "market":
-                "🏆 Resultado",
-
-                "selection":
-                name,
-
-                "value":
-                comment,
-
-            })
-
-    # Marcador previsto
-
-    score = predictions.get(
+    score = p.get(
         "score",
         {}
     )
 
-    if score:
+    if (
+        score.get("home")
+        is not None
+        and
+        score.get("away")
+        is not None
+    ):
 
-        home = score.get(
-            "home"
-        )
-
-        away = score.get(
-            "away"
-        )
-
-        if (
-            home is not None
-            and away is not None
-        ):
-
-            rows.append({
-
-                "market":
+        rows.append(
+            (
                 "⚽ Marcador previsto",
+                f"{score['home']}-"
+                f"{score['away']}",
+                None
+            )
+        )
 
-                "selection":
-                f"{home}-{away}",
+    goals = p.get(
+        "goals",
+        {}
+    )
 
-                "value":
-                None,
+    if goals.get("home"):
 
-            })
+        rows.append(
+            (
+                "⚽ Goles local",
+                str(
+                    goals["home"]
+                ),
+                None
+            )
+        )
 
-    # Under / Over
+    if goals.get("away"):
 
-    under_over = predictions.get(
+        rows.append(
+            (
+                "⚽ Goles visitante",
+                str(
+                    goals["away"]
+                ),
+                None
+            )
+        )
+
+    under_over = p.get(
         "under_over"
     )
 
     if under_over:
 
-        rows.append({
+        rows.append(
+            (
+                "⚽ Under / Over",
+                str(
+                    under_over
+                ),
+                None
+            )
+        )
 
-            "market":
-            "⚽ Goles",
-
-            "selection":
-            str(
-                under_over
-            ),
-
-            "value":
-            None,
-
-        })
-
-    # Goals Home / Away
-
-    goals_home = predictions.get(
-        "goals",
-        {}
-    ).get(
-        "home"
-    )
-
-    goals_away = predictions.get(
-        "goals",
-        {}
-    ).get(
-        "away"
-    )
-
-    if goals_home:
-
-        rows.append({
-
-            "market":
-            "⚽ Goles local",
-
-            "selection":
-            str(
-                goals_home
-            ),
-
-            "value":
-            None,
-
-        })
-
-    if goals_away:
-
-        rows.append({
-
-            "market":
-            "⚽ Goles visitante",
-
-            "selection":
-            str(
-                goals_away
-            ),
-
-            "value":
-            None,
-
-        })
-
-    # Advice
-
-    advice = predictions.get(
+    advice = p.get(
         "advice"
     )
 
     if advice:
 
-        rows.append({
-
-            "market":
-            "🧠 Análisis API",
-
-            "selection":
-            str(
-                advice
-            ),
-
-            "value":
-            None,
-
-        })
+        rows.append(
+            (
+                "🧠 Análisis",
+                str(advice),
+                None
+            )
+        )
 
     return rows
 
 
 # ============================================================
-# RENDER PARTIDO
+# EXTRAER CUOTAS
 # ============================================================
 
-def render_match_card(
-    match,
-    index
+def extract_odds(
+    odds_response
 ):
 
-    home_logo = ""
+    rows = []
 
-    away_logo = ""
+    relevant_words = [
+        "goal",
+        "corner",
+        "card",
+        "shot",
+        "result",
+        "match winner",
+        "double chance",
+        "total",
+    ]
 
-    if match.get(
-        "home_logo"
-    ):
+    for block in odds_response:
 
-        home_logo = (
-            f'<img src="{match["home_logo"]}" '
-            f'width="22" '
-            f'style="vertical-align:middle;'
-            f'margin-right:6px;">'
+        bookmakers = block.get(
+            "bookmakers",
+            []
         )
 
-    if match.get(
-        "away_logo"
-    ):
+        for bookmaker in bookmakers:
 
-        away_logo = (
-            f'<img src="{match["away_logo"]}" '
-            f'width="22" '
-            f'style="vertical-align:middle;'
-            f'margin-right:6px;">'
-        )
+            bookmaker_name = (
+                bookmaker.get(
+                    "name",
+                    "Bookmaker"
+                )
+            )
 
-    status = match.get(
-        "status",
-        ""
-    )
+            for bet in bookmaker.get(
+                "bets",
+                []
+            ):
+
+                market = bet.get(
+                    "name",
+                    ""
+                )
+
+                if not any(
+                    word in market.lower()
+                    for word in relevant_words
+                ):
+                    continue
+
+                for value in bet.get(
+                    "values",
+                    []
+                ):
+
+                    odd = value.get(
+                        "odd"
+                    )
+
+                    if odd is None:
+                        continue
+
+                    try:
+                        odd_float = float(
+                            odd
+                        )
+                    except Exception:
+                        continue
+
+                    rows.append({
+
+                        "bookmaker":
+                            bookmaker_name,
+
+                        "market":
+                            market,
+
+                        "selection":
+                            value.get(
+                                "value"
+                            ),
+
+                        "odds":
+                            odd_float,
+
+                    })
+
+    return rows
+
+
+# ============================================================
+# MOSTRAR CUOTAS
+# ============================================================
+
+def render_odds(
+    fixture_id
+):
 
     st.markdown(
-        f"""
-        <div class="match-card">
-
-            <div class="match-time">
-                📅 {match["date"]}
-                &nbsp;&nbsp;
-                ⏰ {match["time"]}
-                &nbsp;&nbsp;
-                <span class="status">
-                    {status}
-                </span>
-            </div>
-
-            <div style="
-                display:grid;
-                grid-template-columns:
-                1fr auto 1fr;
-                align-items:center;
-                gap:8px;
-            ">
-
-                <div class="team">
-                    {home_logo}
-                    {match["home"]}
-                </div>
-
-                <div class="vs">
-                    VS
-                </div>
-
-                <div class="team"
-                     style="text-align:right;">
-                    {away_logo}
-                    {match["away"]}
-                </div>
-
-            </div>
-
-        </div>
-        """,
-        unsafe_allow_html=True
+        "#### 💰 Cuotas reales"
     )
 
-    return st.button(
-        "🔮 Ver pronóstico y cuotas",
-        key=f"prediction_{index}_{match['fixture_id']}",
-        use_container_width=True
+    odds, error = get_odds(
+        fixture_id
+    )
+
+    if error:
+
+        st.warning(
+            f"No se pudieron consultar "
+            f"las cuotas: {error}"
+        )
+
+        return
+
+    rows = extract_odds(
+        odds
+    )
+
+    if not rows:
+
+        st.markdown(
+            '<div class="no-data">'
+            'No hay cuotas reales '
+            'disponibles para este partido.'
+            '</div>',
+            unsafe_allow_html=True
+        )
+
+        return
+
+    df = pd.DataFrame(
+        rows
+    )
+
+    # Evitar una pantalla gigantesca
+    # en móvil.
+
+    markets = (
+        df["market"]
+        .drop_duplicates()
+        .tolist()
+    )
+
+    for market in markets:
+
+        market_df = df[
+            df["market"] == market
+        ]
+
+        with st.expander(
+            market,
+            expanded=False
+        ):
+
+            for _, row in (
+                market_df.head(20)
+                .iterrows()
+            ):
+
+                st.write(
+                    f"**{row['selection']}** "
+                    f"— {row['odds']:.2f} "
+                    f"· {row['bookmaker']}"
+                )
+
+    st.caption(
+        "Solo se muestran cuotas "
+        "devueltas por API-Football. "
+        "No se generan cuotas artificiales."
     )
 
 
 # ============================================================
-# RENDER PREDICCIONES
+# PANEL DE PARTIDO
 # ============================================================
 
-def render_prediction_panel(
+def render_match_analysis(
     match
 ):
 
@@ -1145,19 +1095,37 @@ def render_prediction_panel(
 
     st.markdown(
         f"""
-        ### 🔮 {match["home"]}
-        vs {match["away"]}
+        <div class="info-card">
 
-        **📅 {match["date"]} · ⏰ {match["time"]}**
-        """
+        <div class="small">
+        {match["date"]} · {match["time"]}
+        </div>
+
+        <h3 style="margin:5px 0;">
+        {match["home"]}
+        vs
+        {match["away"]}
+        </h3>
+
+        <div class="small">
+        {match.get("venue") or "Estadio no indicado"}
+        </div>
+
+        </div>
+        """,
+        unsafe_allow_html=True
     )
 
     # --------------------------------------------------------
-    # PREDICCIÓN API
+    # PREDICCIÓN
     # --------------------------------------------------------
 
+    st.markdown(
+        "#### 🔮 Pronóstico"
+    )
+
     prediction, error = (
-        get_api_predictions(
+        get_prediction(
             fixture_id
         )
     )
@@ -1165,163 +1133,139 @@ def render_prediction_panel(
     if error:
 
         st.warning(
-            f"No se pudo obtener la "
-            f"predicción: {error}"
+            error
         )
 
     else:
 
-        prediction_rows = (
-            extract_prediction_data(
-                prediction
-            )
+        rows = prediction_rows(
+            prediction
         )
 
-        if prediction_rows:
+        if not rows:
 
             st.markdown(
-                "#### 🧠 Pronóstico API-Football"
+                '<div class="no-data">'
+                'API-Football no ha devuelto '
+                'pronóstico para este encuentro.'
+                '</div>',
+                unsafe_allow_html=True
             )
 
-            for row in prediction_rows:
+        else:
+
+            for market, selection, comment in rows:
+
+                extra = (
+                    f"<br><span class='small'>"
+                    f"{comment}</span>"
+                    if comment
+                    else ""
+                )
 
                 st.markdown(
                     f"""
                     <div class="market-card">
 
-                        <b>{row["market"]}</b><br>
+                    <b>{market}</b><br>
 
-                        {row["selection"]}
+                    {selection}
+
+                    {extra}
 
                     </div>
                     """,
                     unsafe_allow_html=True
                 )
 
-        else:
-
-            st.markdown(
-                '<div class="no-data">'
-                'API-Football no ha devuelto '
-                'un pronóstico para este partido.'
-                '</div>',
-                unsafe_allow_html=True
-            )
-
     # --------------------------------------------------------
     # CUOTAS
     # --------------------------------------------------------
 
-    st.markdown(
-        "#### 💰 Cuotas reales"
+    render_odds(
+        fixture_id
     )
 
-    odds, odds_error = (
-        get_fixture_odds(
-            fixture_id
-        )
+
+# ============================================================
+# TARJETAS SUPERIORES
+# ============================================================
+
+def render_summary(
+    fixtures,
+    grouped
+):
+
+    col1, col2, col3, col4 = st.columns(
+        4
     )
 
-    if odds_error:
-
-        st.warning(
-            f"No se pudieron obtener "
-            f"las cuotas: {odds_error}"
+    with col1:
+        st.markdown(
+            f"""
+            <div class="metric">
+            <div class="metric-label">
+            PARTIDOS
+            </div>
+            <div class="metric-value">
+            {len(fixtures)}
+            </div>
+            </div>
+            """,
+            unsafe_allow_html=True
         )
 
-    else:
+    with col2:
+        st.markdown(
+            f"""
+            <div class="metric">
+            <div class="metric-label">
+            JORNADAS
+            </div>
+            <div class="metric-value">
+            {len(grouped)}
+            </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
-        bookmaker_count = 0
-
-        for bookmaker_block in odds:
-
-            bookmakers = (
-                bookmaker_block.get(
-                    "bookmakers",
-                    []
-                )
+    with col3:
+        dates = sorted(
+            set(
+                f["date"]
+                for f in fixtures
             )
+        )
 
-            for bookmaker in bookmakers:
+        st.markdown(
+            f"""
+            <div class="metric">
+            <div class="metric-label">
+            FECHAS
+            </div>
+            <div class="metric-value">
+            {len(dates)}
+            </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
-                bookmaker_count += 1
+    with col4:
 
-                bookmaker_name = (
-                    bookmaker.get(
-                        "name",
-                        "Bookmaker"
-                    )
-                )
-
-                st.markdown(
-                    f"**{bookmaker_name}**"
-                )
-
-                for bet in bookmaker.get(
-                    "bets",
-                    []
-                ):
-
-                    market_name = (
-                        bet.get(
-                            "name",
-                            ""
-                        )
-                    )
-
-                    values = (
-                        bet.get(
-                            "values",
-                            []
-                        )
-                    )
-
-                    # Solo mostramos mercados
-                    # relevantes para nuestra app.
-
-                    relevant = any(
-                        word in market_name.lower()
-                        for word in [
-                            "goals",
-                            "corner",
-                            "cards",
-                            "shots",
-                            "result"
-                        ]
-                    )
-
-                    if not relevant:
-                        continue
-
-                    for value in values:
-
-                        odd = value.get(
-                            "odd"
-                        )
-
-                        if odd is None:
-                            continue
-
-                        st.write(
-                            f"• {market_name}: "
-                            f"{value.get('value')} "
-                            f"→ **{odd}**"
-                        )
-
-        if bookmaker_count == 0:
-
-            st.markdown(
-                '<div class="no-data">'
-                'No hay cuotas reales '
-                'disponibles para este partido.'
-                '</div>',
-                unsafe_allow_html=True
-            )
-
-        st.caption(
-            "Las cuotas mostradas son las "
-            "devueltas por API-Football. "
-            "No se generan cuotas artificiales."
+        st.markdown(
+            """
+            <div class="metric">
+            <div class="metric-label">
+            FUENTE
+            </div>
+            <div class="metric-value">
+            API
+            </div>
+            </div>
+            """,
+            unsafe_allow_html=True
         )
 
 
@@ -1333,21 +1277,22 @@ def main():
 
     st.markdown(
         '<div class="app-title">'
-        '⚽ ValueBet Pro V7'
+        '⚽ ValueBet Pro V7.2'
         '</div>',
         unsafe_allow_html=True
     )
 
     st.markdown(
         '<div class="app-subtitle">'
-        'Pronósticos · Partidos · Cuotas reales · Datos'
+        'Partidos · Jornadas · Pronósticos · '
+        'Cuotas reales'
         '</div>',
         unsafe_allow_html=True
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # SIDEBAR
-    # --------------------------------------------------------
+    # ========================================================
 
     with st.sidebar:
 
@@ -1359,61 +1304,96 @@ def main():
             "Competición",
             list(
                 COMPETITIONS.keys()
-            )
-        )
-
-        number_fixtures = st.slider(
-            "Próximos partidos",
-            10,
-            100,
-            50,
-            10
+            ),
+            index=0
         )
 
         st.divider()
 
-        st.caption(
-            "API-Football se utiliza para "
-            "partidos, jornadas, pronósticos "
-            "y cuotas."
+        days_ahead = st.slider(
+            "Días de calendario",
+            min_value=3,
+            max_value=31,
+            value=14,
+            step=1
         )
 
         st.caption(
-            "football-data.org se utiliza "
-            "como fuente complementaria "
-            "de calendario y clasificación."
+            "La app utiliza consultas "
+            "por fechas porque tu plan "
+            "Free no permite el parámetro "
+            "`next`."
         )
+
+        st.divider()
+
+        if st.button(
+            "🔄 Actualizar datos",
+            use_container_width=True
+        ):
+
+            st.cache_data.clear()
+            st.rerun()
 
     competition = COMPETITIONS[
         competition_name
     ]
 
-    api_league = competition[
-        "api_football"
+    league_id = competition[
+        "api_id"
     ]
 
-    football_data_code = (
-        competition[
-            "football_data"
-        ]
-    )
+    fd_code = competition[
+        "football_data"
+    ]
 
-    # --------------------------------------------------------
-    # API-FOOTBALL
-    # --------------------------------------------------------
+    # ========================================================
+    # FECHAS
+    # ========================================================
 
-    fixtures, api_error = (
-        get_upcoming_fixtures(
-            api_league,
-            number_fixtures
+    today = date.today()
+
+    end_date = (
+        today
+        + timedelta(
+            days=days_ahead
         )
     )
+
+    start_string = today.isoformat()
+    end_string = end_date.isoformat()
+
+    # ========================================================
+    # API-FOOTBALL
+    # ========================================================
+
+    fixtures_raw, api_error = (
+        get_fixtures_by_dates(
+            league_id,
+            start_string,
+            end_string
+        )
+    )
+
+    # ========================================================
+    # FOOTBALL-DATA
+    # ========================================================
+
+    fd_matches, fd_error = (
+        get_fd_matches(
+            fd_code
+        )
+    )
+
+    # ========================================================
+    # ERROR API
+    # ========================================================
 
     if api_error:
 
         st.error(
-            "Error obteniendo próximos "
-            "partidos de API-Football:"
+            "No se pudieron obtener "
+            "los próximos partidos."
         )
 
         st.code(
@@ -1421,115 +1401,59 @@ def main():
         )
 
         st.info(
-            "No estamos solicitando "
-            "/fixtures/rounds ni "
-            "season=2026. La app consulta "
-            "directamente los próximos "
-            "partidos."
+            "La V7.2 usa /fixtures con "
+            "from/to. No utiliza `next`, "
+            "ni /fixtures/rounds, ni "
+            "season=2026."
         )
 
         return
 
-    # --------------------------------------------------------
-    # FOOTBALL-DATA
-    # --------------------------------------------------------
+    # ========================================================
+    # NORMALIZAR
+    # ========================================================
 
-    fd_matches, fd_error = (
-        get_football_data_matches(
-            football_data_code
-        )
+    fixtures = [
+        normalize_fixture(f)
+        for f in fixtures_raw
+    ]
+
+    # Solo futuros o partidos del rango
+    fixtures = sorted(
+        fixtures,
+        key=lambda x:
+            x["date_raw"] or ""
     )
 
-    # --------------------------------------------------------
-    # TABS
-    # --------------------------------------------------------
+    grouped = group_rounds(
+        fixtures_raw
+    )
 
-    tab_predictions, tab_matches, tab_table = (
+    # ========================================================
+    # RESUMEN
+    # ========================================================
+
+    render_summary(
+        fixtures,
+        grouped
+    )
+
+    st.write("")
+
+    # ========================================================
+    # TABS
+    # ========================================================
+
+    tab_predictions, tab_matches, tab_table, tab_status = (
         st.tabs(
             [
                 "🔮 Pronósticos",
                 "📅 Partidos",
                 "🏆 Clasificación",
+                "🔧 Estado",
             ]
         )
     )
-
-    # ========================================================
-    # PARTIDOS
-    # ========================================================
-
-    with tab_matches:
-
-        st.markdown(
-            "### 📅 Partidos por jornadas"
-        )
-
-        st.caption(
-            "La jornada procede del campo "
-            "`league.round` de API-Football. "
-            "No se calcula ni se inventa."
-        )
-
-        if not fixtures:
-
-            st.info(
-                "API-Football no ha devuelto "
-                "próximos partidos."
-            )
-
-        else:
-
-            grouped = group_by_round(
-                fixtures
-            )
-
-            st.success(
-                f"{len(fixtures)} partidos "
-                f"recibidos de API-Football"
-            )
-
-            for round_name, matches in (
-                grouped.items()
-            ):
-
-                dates = sorted(
-                    set(
-                        m["date"]
-                        for m in matches
-                    )
-                )
-
-                date_text = (
-                    " · ".join(dates)
-                )
-
-                st.markdown(
-                    f"""
-                    <div class="round-header">
-
-                        <div class="round-title">
-                            📋 {round_name}
-                        </div>
-
-                        <div class="round-info">
-                            {date_text}
-                            · {len(matches)}
-                            partidos
-                        </div>
-
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-
-                for i, match in enumerate(
-                    matches
-                ):
-
-                    render_match_card(
-                        match,
-                        f"{round_name}_{i}"
-                    )
 
     # ========================================================
     # PRONÓSTICOS
@@ -1538,90 +1462,86 @@ def main():
     with tab_predictions:
 
         st.markdown(
-            "### 🔮 Pronósticos"
+            '<div class="section-title">'
+            '🔮 Pronósticos'
+            '</div>',
+            unsafe_allow_html=True
         )
 
         st.caption(
-            "Selecciona un partido para "
-            "consultar el pronóstico y las "
-            "cuotas disponibles."
+            "Selecciona un encuentro para "
+            "consultar el pronóstico de "
+            "API-Football y sus cuotas "
+            "reales disponibles."
         )
 
         if not fixtures:
 
             st.info(
-                "No hay partidos disponibles."
+                f"No hay partidos entre "
+                f"{format_date(start_string)} "
+                f"y "
+                f"{format_date(end_string)}."
             )
 
         else:
-
-            grouped = group_by_round(
-                fixtures
-            )
 
             for round_name, matches in (
                 grouped.items()
             ):
 
                 st.markdown(
-                    f"#### {round_name}"
+                    f"### {round_name}"
                 )
 
-                for i, match in enumerate(
+                for idx, match in enumerate(
                     matches
                 ):
 
-                    with st.container(
-                        border=True
-                    ):
+                    col1, col2, col3 = (
+                        st.columns(
+                            [1.4, 5, 1.2]
+                        )
+                    )
 
-                        c1, c2, c3 = st.columns(
-                            [1, 5, 2]
+                    with col1:
+
+                        st.markdown(
+                            f"**{match['time']}**"
                         )
 
-                        with c1:
+                        st.caption(
+                            match["date"]
+                        )
 
-                            st.markdown(
-                                f"**{match['time']}**"
-                            )
+                    with col2:
 
-                            st.caption(
-                                match["date"]
-                            )
+                        st.markdown(
+                            f"**{match['home']}**"
+                        )
 
-                        with c2:
+                        st.markdown(
+                            f"vs **{match['away']}**"
+                        )
 
-                            st.markdown(
-                                f"**{match['home']}**"
-                            )
+                    with col3:
 
-                            st.markdown(
-                                f"vs "
-                                f"**{match['away']}**"
-                            )
+                        show = st.button(
+                            "Ver",
+                            key=(
+                                f"view_"
+                                f"{match['fixture_id']}"
+                            ),
+                            use_container_width=True
+                        )
 
-                        with c3:
+                    if show:
 
-                            if st.button(
-                                "Ver",
-                                key=(
-                                    "pred_"
-                                    f"{round_name}_"
-                                    f"{i}_"
-                                    f"{match['fixture_id']}"
-                                ),
-                                use_container_width=True
-                            ):
-
-                                st.session_state[
-                                    "selected_fixture"
-                                ] = match[
-                                    "fixture_id"
-                                ]
-
-                                st.session_state[
-                                    "selected_match"
-                                ] = match
+                        st.session_state[
+                            "selected_fixture"
+                        ] = match[
+                            "fixture_id"
+                        ]
 
                     selected = (
                         st.session_state.get(
@@ -1635,9 +1555,137 @@ def main():
                         match["fixture_id"]
                     ):
 
-                        render_prediction_panel(
+                        render_match_analysis(
                             match
                         )
+
+                        st.divider()
+
+    # ========================================================
+    # PARTIDOS
+    # ========================================================
+
+    with tab_matches:
+
+        st.markdown(
+            '<div class="section-title">'
+            '📅 Partidos por jornadas'
+            '</div>',
+            unsafe_allow_html=True
+        )
+
+        st.caption(
+            "Fecha, hora, equipos y jornada "
+            "proceden de los datos reales "
+            "devueltos por API-Football."
+        )
+
+        if not fixtures:
+
+            st.info(
+                "No hay partidos disponibles."
+            )
+
+        else:
+
+            for round_name, matches in (
+                grouped.items()
+            ):
+
+                dates = sorted(
+                    set(
+                        m["date"]
+                        for m in matches
+                    )
+                )
+
+                st.markdown(
+                    f"""
+                    <div class="round-card">
+
+                    <div class="round-title">
+                    📋 {round_name}
+                    </div>
+
+                    <div class="round-subtitle">
+                    {" · ".join(dates)}
+                    · {len(matches)} partidos
+                    </div>
+
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+                for match in matches:
+
+                    home_logo = ""
+
+                    away_logo = ""
+
+                    if match[
+                        "home_logo"
+                    ]:
+
+                        home_logo = (
+                            f'<img src="'
+                            f'{match["home_logo"]}" '
+                            f'width="24" '
+                            f'style="vertical-align:middle;'
+                            f'margin-right:6px;">'
+                        )
+
+                    if match[
+                        "away_logo"
+                    ]:
+
+                        away_logo = (
+                            f'<img src="'
+                            f'{match["away_logo"]}" '
+                            f'width="24" '
+                            f'style="vertical-align:middle;'
+                            f'margin-right:6px;">'
+                        )
+
+                    st.markdown(
+                        f"""
+                        <div class="match-card">
+
+                        <div class="match-date">
+                        📅 {match["date"]}
+                        &nbsp; · &nbsp;
+                        ⏰ {match["time"]}
+                        </div>
+
+                        <div style="
+                        display:grid;
+                        grid-template-columns:
+                        1fr auto 1fr;
+                        align-items:center;
+                        gap:8px;
+                        ">
+
+                        <div class="team-name">
+                        {home_logo}
+                        {match["home"]}
+                        </div>
+
+                        <div class="vs">
+                        VS
+                        </div>
+
+                        <div class="team-name"
+                        style="text-align:right;">
+                        {away_logo}
+                        {match["away"]}
+                        </div>
+
+                        </div>
+
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
 
     # ========================================================
     # CLASIFICACIÓN
@@ -1646,18 +1694,27 @@ def main():
     with tab_table:
 
         st.markdown(
-            "### 🏆 Clasificación"
+            '<div class="section-title">'
+            '🏆 Clasificación'
+            '</div>',
+            unsafe_allow_html=True
         )
 
         standings, standings_error = (
-            get_standings(
-                football_data_code
+            get_fd_standings(
+                fd_code
             )
         )
 
         if standings_error:
 
-            st.error(
+            st.warning(
+                "No se pudo obtener la "
+                "clasificación de "
+                "football-data.org."
+            )
+
+            st.code(
                 standings_error
             )
 
@@ -1681,65 +1738,94 @@ def main():
             )
 
     # ========================================================
-    # DIAGNÓSTICO
+    # ESTADO
     # ========================================================
 
-    with st.expander(
-        "🔧 Estado de las APIs"
-    ):
+    with tab_status:
 
-        st.write(
-            "API-Football:"
+        st.markdown(
+            '<div class="section-title">'
+            '🔧 Estado de las fuentes'
+            '</div>',
+            unsafe_allow_html=True
         )
 
-        if api_error:
-
-            st.error(
-                api_error
-            )
-
-        else:
-
-            st.success(
-                "Conectada"
-            )
+        st.success(
+            "API-Football conectada"
+            if not api_error
+            else "API-Football con error"
+        )
 
         st.write(
-            "football-data.org:"
+            f"Partidos recibidos: "
+            f"**{len(fixtures)}**"
         )
+
+        st.write(
+            f"Rango consultado: "
+            f"**{start_string} → {end_string}**"
+        )
+
+        st.write(
+            "Método: **fixtures + from/to**"
+        )
+
+        st.write(
+            "Parámetro `next`: **NO utilizado**"
+        )
+
+        st.write(
+            "`/fixtures/rounds`: **NO utilizado**"
+        )
+
+        st.divider()
 
         if fd_error:
 
             st.warning(
+                "football-data.org: "
+                "no disponible"
+            )
+
+            st.code(
                 fd_error
             )
 
         else:
 
             st.success(
-                "Conectada"
+                "football-data.org conectado"
             )
 
-        st.write(
-            f"Partidos API-Football: "
-            f"{len(fixtures)}"
+            st.write(
+                f"Partidos complementarios: "
+                f"**{len(fd_matches)}**"
+            )
+
+        st.divider()
+
+        st.caption(
+            "Las cuotas y pronósticos solo "
+            "se muestran cuando la API los "
+            "devuelve. No se generan datos "
+            "artificialmente."
         )
 
-        st.write(
-            f"Partidos football-data.org: "
-            f"{len(fd_matches)}"
-        )
+    # ========================================================
+    # FOOTER
+    # ========================================================
 
     st.divider()
 
     st.caption(
-        "ValueBet Football Pro V7.1 · "
-        "Sin cuotas ni estadísticas inventadas"
+        "ValueBet Football Pro V7.2 · "
+        "API-Football + football-data.org · "
+        "Sin cuotas inventadas"
     )
 
 
 # ============================================================
-# EJECUCIÓN
+# RUN
 # ============================================================
 
 if __name__ == "__main__":
