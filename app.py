@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 import requests
@@ -437,6 +438,30 @@ def get_rounds(
     )
 
     return rounds, None
+
+
+@st.cache_data(ttl=300)
+def get_today_fixtures(
+    league_id: int,
+    target_date: date
+):
+    """
+    Obtiene los partidos de una fecha concreta para una liga.
+    No usa el parámetro 'season', solo 'date' + 'league',
+    lo que debería funcionar en el plan gratuito.
+    """
+    data, error = api_football_get(
+        "/fixtures",
+        {
+            "league": league_id,
+            "date": target_date.isoformat(),
+        }
+    )
+
+    if error:
+        return [], error
+
+    return data.get("response", []), None
 
 
 # ============================================================
@@ -2880,6 +2905,7 @@ def render_prediction(
 # APP
 # ============================================================
 
+
 def main():
 
     # --------------------------------------------------------
@@ -2895,7 +2921,7 @@ def main():
 
     st.markdown(
         '<div class="subtitle">'
-        'Datos reales · Pronósticos · Value'
+        'Pronósticos del día · Datos históricos reales'
         '</div>',
         unsafe_allow_html=True
     )
@@ -2917,14 +2943,9 @@ def main():
             )
         )
 
-        # API-Football free plan: solo permite
-        # temporadas 2022, 2023 y 2024.
-        season_options = [2024, 2023, 2022]
-
-        season = st.selectbox(
-            "Temporada disponible",
-            season_options,
-            index=0
+        target_date = st.date_input(
+            "Fecha de los partidos",
+            value=date.today(),
         )
 
         st.divider()
@@ -2953,22 +2974,17 @@ def main():
 
         st.divider()
 
-        st.subheader("📡 Consumo de API (plan gratuito)")
+        st.subheader("📡 Consumo de API")
 
         lookback_matches = st.slider(
-            "Partidos históricos por equipo (menos = "
-            "menos peticiones, más rápido)",
+            "Partidos históricos por equipo",
             5,
             20,
             10,
             1,
             help=(
-                "Cada partido histórico usado para las "
-                "estadísticas de mercados (córners, tarjetas, "
-                "tiros, paradas) se agrupa en llamadas por "
-                "lotes de hasta 20 IDs, así que bajar este "
-                "número reduce sobre todo el nº de temporadas "
-                "que hace falta consultar."
+                "Menos partidos = menos peticiones, "
+                "pero perfiles menos precisos."
             ),
         )
 
@@ -2977,99 +2993,41 @@ def main():
         ).get("API-Football", 0)
 
         st.caption(
-            f"Peticiones API-Football usadas en esta sesión: "
-            f"**{used_calls}** / ~100 diarias (plan gratuito)."
+            f"Peticiones API-Football: "
+            f"**{used_calls}** / ~100 diarias"
         )
 
         st.divider()
 
         st.caption(
-            "Las cuotas solo se consideran "
-            "Value cuando existe una cuota "
-            "real devuelta por la API. "
-            "Nota: el plan gratuito de API-Football no da "
-            "acceso a la temporada en curso para estas ligas; "
-            "solo a temporadas ya completadas."
+            "El histórico se obtiene de 2022-2024 "
+            "(plan gratuito). Los partidos del día "
+            "se piden por fecha sin usar season."
         )
 
-    competition = COMPETITIONS[
-        competition_name
-    ]
+    competition = COMPETITIONS[competition_name]
+    league_id = competition["api_football"]
+    football_data_code = competition["football_data"]
 
-    league_id = competition[
-        "api_football"
-    ]
+    # Temporadas para el histórico
+    historical_seasons = [2024, 2023, 2022]
 
-    football_data_code = (
-        competition[
-            "football_data"
-        ]
+    # --------------------------------------------------------
+    # OBTENER PARTIDOS DEL DÍA
+    # --------------------------------------------------------
+
+    today_fixtures, today_error = get_today_fixtures(
+        league_id,
+        target_date
     )
 
-    # --------------------------------------------------------
-    # CARGA JORNADAS
-    # --------------------------------------------------------
-
-    # Se intenta con la temporada seleccionada;
-    # si falla o viene vacía, se hace fallback
-    # a la temporada anterior automáticamente.
-    seasons_to_try = [season]
-    if season - 1 not in seasons_to_try:
-        seasons_to_try.append(season - 1)
-
-    rounds = []
-    round_error = None
-    effective_season = season
-
-    for s in seasons_to_try:
-        rounds, round_error = get_rounds(
-            league_id,
-            s
-        )
-        if not round_error and rounds:
-            effective_season = s
-            break
-        rounds = []
-
-    if round_error:
+    if today_error:
 
         st.error(
-            f"Error obteniendo jornadas: "
-            f"{round_error}"
+            f"Error obteniendo partidos: {today_error}"
         )
 
         return
-
-    if not rounds:
-
-        st.warning(
-            "API-Football no ha devuelto "
-            "jornadas para esta competición "
-            "y temporada."
-        )
-
-        return
-
-    if effective_season != season:
-        st.info(
-            f"No se encontraron jornadas para "
-            f"la temporada {season}. Se muestran "
-            f"las de la temporada {effective_season}."
-        )
-
-    # Solo se permiten datos de los 2 años anteriores.
-    # Se solicitan las temporadas necesarias para cubrir esa ventana.
-    current_season = effective_season
-    historical_seasons = [
-        current_season,
-        current_season - 1,
-        current_season - 2
-    ]
-
-    rounds = sorted(
-        rounds,
-        key=round_sort_key
-    )
 
     # --------------------------------------------------------
     # TABS
@@ -3077,345 +3035,205 @@ def main():
 
     (
         tab_predictions,
-        tab_matches,
+        tab_widget,
         tab_table,
         tab_calibration,
     ) = st.tabs(
         [
-            "🔮 Pronósticos",
-            "📅 Partidos",
+            "🔮 Pronósticos del día",
+            "📅 Partidos en vivo",
             "🏆 Clasificación",
             "🧪 Calibración",
         ]
     )
 
     # ========================================================
-    # PRONÓSTICOS
+    # PRONÓSTICOS DEL DÍA
     # ========================================================
 
     with tab_predictions:
 
         st.markdown(
             '<div class="section-title">'
-            '🔮 Pronósticos'
+            f'🔮 Pronósticos — {target_date.strftime("%d/%m/%Y")}'
             '</div>',
             unsafe_allow_html=True
         )
 
-        st.caption(
-            "Aquí aparecen estimaciones basadas "
-            "únicamente en datos disponibles. "
-            "Sin cuota real no se calcula Value."
-        )
-
-        selected_round = st.selectbox(
-            "Jornada",
-            rounds,
-            key="prediction_round"
-        )
-
-        fixtures, error = (
-            get_fixtures_by_round(
-                league_id,
-                current_season,
-                selected_round
-            )
-        )
-
-        if error:
-
-            st.error(
-                error
-            )
-
-        elif not fixtures:
+        if not today_fixtures:
 
             st.info(
-                "No hay partidos devueltos "
-                "por API-Football para esta jornada."
+                f"No hay partidos para el "
+                f"{target_date.strftime('%d/%m/%Y')} "
+                f"en {competition_name}."
             )
 
         else:
 
-            # --------------------------------------------------
-            # SELECCIÓN MANUAL DE PARTIDOS (control de cuota)
-            # --------------------------------------------------
-            #
-            # Con plan gratuito (100 peticiones/día), calcular
-            # automáticamente TODOS los partidos de una jornada
-            # puede agotar la cuota en una sola jornada. Por eso
-            # el usuario elige explícitamente qué partidos quiere
-            # analizar.
+            st.caption(
+                f"**{len(today_fixtures)} partidos**. "
+                "Selecciona cuáles analizar. "
+                "Histórico de 2022-2024."
+            )
 
-            upcoming = [
-                f for f in fixtures
-                if f["fixture"].get("status", {}).get("short")
-                in ["NS", "TBD"]
+            match_labels = {
+                f"{f['teams']['home']['name']} vs "
+                f"{f['teams']['away']['name']} "
+                f"({local_time_string(f['fixture']['date'])}) "
+                f"[{f['fixture'].get('status', {}).get('short', '?')}]": f
+                for f in today_fixtures
+            }
+
+            est_calls = 2 * lookback_matches + 3
+
+            selected_labels = st.multiselect(
+                f"Partidos a analizar (~{est_calls} peticiones c/u)",
+                list(match_labels.keys()),
+                default=[],
+                key="prediction_fixture_select",
+            )
+
+            fixtures_to_analyze = [
+                match_labels[label]
+                for label in selected_labels
             ]
 
-            if not upcoming:
+            if not fixtures_to_analyze:
 
-                st.info(
-                    "No hay partidos pendientes de jugar "
-                    "(NS/TBD) en esta jornada."
-                )
-
-                fixtures_to_analyze = []
+                st.info("Selecciona al menos un partido.")
 
             else:
 
-                match_labels = {
-                    f"{f['teams']['home']['name']} vs "
-                    f"{f['teams']['away']['name']} "
-                    f"({local_date_string(f['fixture']['date'])})": f
-                    for f in upcoming
-                }
+                prediction_rows = []
 
-                est_calls_per_match = (
-                    2 * (1 + 1) + 1
-                )  # ~2 equipos*(temporadas+detalle batch) + cuotas
+                with st.spinner(
+                    "Calculando perfiles y predicciones..."
+                ):
 
-                selected_labels = st.multiselect(
-                    f"Partidos a analizar "
-                    f"(~{est_calls_per_match} peticiones "
-                    f"API-Football c/u con caché fría)",
-                    list(match_labels.keys()),
-                    default=list(match_labels.keys())[:1],
-                    key="prediction_fixture_select",
-                )
+                    for fixture in fixtures_to_analyze:
 
-                fixtures_to_analyze = [
-                    match_labels[label]
-                    for label in selected_labels
-                ]
-
-                used = st.session_state.get(
-                    "api_call_count", {}
-                ).get("API-Football", 0)
-
-                st.caption(
-                    f"📊 Peticiones a API-Football "
-                    f"en esta sesión: {used} "
-                    f"(plan gratuito ≈ 100/día)"
-                )
-
-            prediction_rows = []
-
-            for fixture in fixtures_to_analyze:
-
-                status = fixture[
-                    "fixture"
-                ].get(
-                    "status",
-                    {}
-                ).get(
-                    "short"
-                )
-
-                # Los pronósticos PRE-partido solo tienen sentido
-                # para partidos que todavía no se han jugado.
-                # (Bug corregido: antes se excluían justo los NS/TBD,
-                # es decir, se pronosticaban partidos ya en curso o
-                # finalizados y nunca los futuros.)
-
-                if status in [
-                    "NS",
-                    "TBD"
-                ]:
-
-                    rows = (
-                        create_predictions_for_fixture(
+                        rows = create_predictions_for_fixture(
                             fixture,
                             league_id,
                             historical_seasons,
                             lookback_matches,
                         )
-                    )
 
-                    prediction_rows.extend(
-                        rows
-                    )
+                        prediction_rows.extend(rows)
 
-            if not prediction_rows:
-
-                st.info(
-                    "Todavía no hay suficientes "
-                    "estadísticas reales disponibles "
-                    "para generar pronósticos de "
-                    "esta jornada."
-                )
-
-            else:
-
-                predictions_df = pd.DataFrame(
-                    prediction_rows
-                )
-
-                predictions_df = (
-                    predictions_df[
-                        predictions_df[
-                            "probability"
-                        ]
-                        >=
-                        (
-                            min_probability
-                            / 100
-                        )
-                    ]
-                    .copy()
-                )
-
-                if predictions_df.empty:
+                if not prediction_rows:
 
                     st.info(
-                        "No hay pronósticos que "
-                        "superen la probabilidad "
-                        "mínima seleccionada."
+                        "No hay estadísticas históricas "
+                        "suficientes para estos equipos."
                     )
 
                 else:
 
-                    # Filtro de EV mínimo (antes definido en la
-                    # barra lateral pero nunca aplicado).
-                    # Las filas sin cuota real (ev = None/NaN) se
-                    # mantienen salvo que el usuario pida
-                    # explícitamente "solo con Value real".
+                    predictions_df = pd.DataFrame(prediction_rows)
 
-                    ev_num = pd.to_numeric(
-                        predictions_df["ev"],
-                        errors="coerce"
-                    )
+                    predictions_df = predictions_df[
+                        predictions_df["probability"]
+                        >= (min_probability / 100)
+                    ].copy()
 
-                    if only_with_value:
+                    if predictions_df.empty:
 
-                        predictions_df = predictions_df[
-                            ev_num >= (min_ev / 100)
-                        ].copy()
+                        st.info(
+                            "No hay pronósticos que superen "
+                            "la probabilidad mínima."
+                        )
 
                     else:
 
-                        predictions_df = predictions_df[
+                        ev_num = pd.to_numeric(
+                            predictions_df["ev"],
+                            errors="coerce"
+                        )
+
+                        if only_with_value:
+                            predictions_df = predictions_df[
+                            ev_num >= (min_ev / 100)
+                            ].copy()
+                        else:
+                            predictions_df = predictions_df[
                             ev_num.isna()
                             | (ev_num >= (min_ev / 100))
-                        ].copy()
+                            ].copy()
 
-                if predictions_df.empty:
+                    if predictions_df.empty:
 
-                    st.info(
-                        "No hay pronósticos que superen "
-                        "el EV mínimo seleccionado."
-                    )
-
-                else:
-
-                    # Primero Value real
-
-                    predictions_df[
-                        "ev_sort"
-                    ] = predictions_df[
-                        "ev"
-                    ].fillna(
-                        -999
-                    )
-
-                    predictions_df = (
-                        predictions_df
-                        .sort_values(
-                            [
-                                "ev_sort",
-                                "probability"
-                            ],
-                            ascending=False
-                        )
-                    )
-
-                    for _, row in (
-                        predictions_df
-                        .head(50)
-                        .iterrows()
-                    ):
-
-                        st.markdown(
-                            f"### "
-                            f"{row['date']} · "
-                            f"{row['time']} · "
-                            f"{row['home']} vs "
-                            f"{row['away']}"
+                        st.info(
+                            "No hay pronósticos que superen "
+                            "el EV mínimo seleccionado."
                         )
 
-                        render_prediction(
-                            row
+                    else:
+
+                        predictions_df["ev_sort"] = (
+                            predictions_df["ev"].fillna(-999)
                         )
+
+                        predictions_df = (
+                            predictions_df.sort_values(
+                                ["ev_sort", "probability"],
+                                ascending=False
+                            )
+                        )
+
+                        for _, row in (
+                            predictions_df.head(50).iterrows()
+                        ):
+
+                            st.markdown(
+                                f"### {row['time']} · "
+                                f"{row['home']} vs {row['away']}"
+                            )
+
+                            render_prediction(row)
 
     # ========================================================
-    # PARTIDOS
+    # WIDGET EN VIVO
     # ========================================================
 
-    with tab_matches:
+    with tab_widget:
 
         st.markdown(
             '<div class="section-title">'
-            '📅 Partidos por jornada'
+            '📅 Partidos en vivo'
             '</div>',
             unsafe_allow_html=True
         )
 
         st.caption(
-            "Fecha, hora y equipos procedentes "
-            "directamente de API-Football."
+            "Widget en tiempo real (no consume peticiones API)."
         )
 
-        # Elegimos si mostrar todas las jornadas
-        # o una concreta para no sobrecargar móvil.
-
-        round_to_show = st.selectbox(
-            "Seleccionar jornada",
-            rounds,
-            key="matches_round"
+        widget_html = """
+        <script src="https://widgets.api-sports.io/1.4.4/widgets.js"></script>
+        <api-sports-widget data-type="config"
+          data-sport="football"
+          data-lang="es"
+          data-theme="white"
+          data-timezone="Europe/Madrid"
+          data-show-errors="true"
+          data-show-logos="true"
+          data-favorite="true"
+        ></api-sports-widget>
+        <api-sports-widget data-type="games"
+          data-date="__DATE__"
+          data-games-style="1"
+          data-refresh="60"
+          data-league="__LEAGUE_ID__"
+          data-tab="all"
+        ></api-sports-widget>
+        """.replace(
+            "__LEAGUE_ID__", str(league_id)
+        ).replace(
+            "__DATE__", target_date.isoformat()
         )
 
-        fixtures_df, error = (
-            load_round_fixtures(
-                league_id,
-                current_season,
-                round_to_show
-            )
-        )
-
-        if error:
-
-            st.error(
-                error
-            )
-
-        elif fixtures_df.empty:
-
-            st.info(
-                "No hay partidos para esta jornada."
-            )
-
-        else:
-
-            st.markdown(
-                f"""
-                <div class="round-card">
-                    <b>{round_to_show}</b>
-                    <div class="info-line">
-                        {len(fixtures_df)}
-                        partidos encontrados
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-
-            for _, row in (
-                fixtures_df.iterrows()
-            ):
-
-                render_match(
-                    row
-                )
+        components.html(widget_html, height=500)
 
     # ========================================================
     # CLASIFICACIÓN
@@ -3430,27 +3248,13 @@ def main():
             unsafe_allow_html=True
         )
 
-        standings, error = (
-            get_standings(
-                football_data_code
-            )
-        )
+        standings, error = get_standings(football_data_code)
 
         if error:
-
-            st.error(
-                error
-            )
-
+            st.error(error)
         elif standings.empty:
-
-            st.info(
-                "No hay clasificación "
-                "disponible en football-data.org."
-            )
-
+            st.info("No hay clasificación disponible.")
         else:
-
             st.dataframe(
                 standings,
                 hide_index=True,
@@ -3471,116 +3275,132 @@ def main():
         )
 
         st.caption(
-            "Comprueba, sobre partidos YA JUGADOS, si la "
-            "probabilidad que habría dado el modelo antes del "
-            "partido se ajusta a lo que pasó realmente. "
-            "⚠️ No es un backtest riguroso (usa datos dentro de la "
-            "misma ventana histórica), pero sirve para detectar "
-            "errores de calibración evidentes. Consume peticiones "
-            "API-Football — ejecútalo solo cuando quieras revisar "
-            "el modelo."
+            "Comprueba predicciones vs resultados reales "
+            "en partidos ya jugados. Consume peticiones API."
         )
 
-        calibration_round = st.selectbox(
-            "Jornada ya finalizada a comprobar",
-            rounds,
-            key="calibration_round"
+        season_options = [2024, 2023, 2022]
+        calib_season = st.selectbox(
+            "Temporada",
+            season_options,
+            index=0,
+            key="calibration_season"
         )
 
-        max_matches = st.slider(
-            "Nº de partidos a comprobar (más partidos = "
-            "más peticiones API)",
-            1, 5, 3, 1,
-            key="calibration_max_matches"
+        calib_rounds, calib_round_error = get_rounds(
+            league_id, calib_season
         )
 
-        run_check = st.button(
-            "▶️ Ejecutar comprobación de calibración"
-        )
+        if calib_round_error:
+            st.error(f"Error: {calib_round_error}")
+        elif not calib_rounds:
+            st.info(
+                f"Sin jornadas para {competition_name} "
+                f"en {calib_season}."
+            )
+        else:
 
-        if run_check:
-
-            calib_fixtures, calib_error = get_fixtures_by_round(
-                league_id,
-                current_season,
-                calibration_round
+            calib_rounds = sorted(
+                calib_rounds, key=round_sort_key
             )
 
-            if calib_error:
+            calibration_round = st.selectbox(
+                "Jornada a comprobar",
+                calib_rounds,
+                key="calibration_round"
+            )
 
-                st.error(calib_error)
+            max_matches = st.slider(
+                "Nº de partidos", 1, 5, 3, 1,
+                key="calibration_max_matches"
+            )
 
-            else:
+            run_check = st.button(
+                "▶️ Ejecutar comprobación"
+            )
 
-                finished = [
-                    f for f in calib_fixtures
-                    if f["fixture"].get("status", {}).get("short")
-                    == "FT"
-                ][:max_matches]
+            if run_check:
 
-                if not finished:
-
-                    st.info(
-                        "Esta jornada no tiene partidos finalizados "
-                        "(FT) todavía, o la API no los ha devuelto."
+                calib_fixtures, calib_error = (
+                    get_fixtures_by_round(
+                        league_id,
+                        calib_season,
+                        calibration_round
                     )
+                )
 
+                if calib_error:
+                    st.error(calib_error)
                 else:
 
-                    with st.spinner(
-                        "Recalculando predicciones pre-partido "
-                        "y comparando con el resultado real..."
-                    ):
+                    finished = [
+                        f for f in calib_fixtures
+                        if f["fixture"].get(
+                            "status", {}
+                        ).get("short") == "FT"
+                    ][:max_matches]
 
-                        calib_rows = run_calibration_check(
-                            finished,
-                            league_id,
-                            historical_seasons,
-                            lookback_matches,
-                        )
-
-                    if not calib_rows:
+                    if not finished:
 
                         st.info(
-                            "No se pudieron generar predicciones "
-                            "comparables (histórico insuficiente "
-                            "para estos equipos)."
+                            "Sin partidos finalizados (FT)."
                         )
 
                     else:
 
-                        calib_df = pd.DataFrame(calib_rows)
+                        with st.spinner(
+                            "Calculando predicciones..."
+                        ):
 
-                        hit_rate = (
-                            (calib_df["Acierto"] == "✅").mean()
-                            * 100
-                        )
-                        avg_brier = calib_df["Brier"].mean()
-
-                        col1, col2 = st.columns(2)
-
-                        with col1:
-                            st.metric(
-                                "Acierto (Más de X)",
-                                f"{hit_rate:.1f}%"
-                            )
-
-                        with col2:
-                            st.metric(
-                                "Brier score medio",
-                                f"{avg_brier:.3f}",
-                                help=(
-                                    "0 = predicciones perfectas, "
-                                    "0.25 = equivalente a asignar "
-                                    "siempre 50%, más alto = peor."
+                            calib_rows = (
+                                run_calibration_check(
+                                    finished,
+                                    league_id,
+                                    [calib_season, calib_season - 1],
+                                    lookback_matches,
                                 )
                             )
 
-                        st.dataframe(
-                            calib_df,
-                            hide_index=True,
-                            use_container_width=True
-                        )
+                        if not calib_rows:
+
+                            st.info(
+                                "Histórico insuficiente "
+                                "para estos equipos."
+                            )
+
+                        else:
+
+                            calib_df = pd.DataFrame(calib_rows)
+
+                            hit_rate = (
+                                (calib_df["Acierto"] == "✅").mean()
+                                * 100
+                            )
+                            avg_brier = calib_df["Brier"].mean()
+
+                            col1, col2 = st.columns(2)
+
+                            with col1:
+                                st.metric(
+                                    "Acierto",
+                                    f"{hit_rate:.1f}%"
+                                )
+
+                            with col2:
+                                st.metric(
+                                    "Brier score",
+                                    f"{avg_brier:.3f}",
+                                    help=(
+                                        "0 = perfecto, "
+                                        "0.25 = azar."
+                                    )
+                                )
+
+                            st.dataframe(
+                                calib_df,
+                                hide_index=True,
+                                use_container_width=True
+                            )
 
     # ========================================================
     # FOOTER
@@ -3593,10 +3413,8 @@ def main():
     ).get("API-Football", 0)
 
     st.caption(
-        f"ValueBet Football Pro V8 · "
-        f"Datos de API-Football + football-data.org · "
-        f"{used_calls_footer} peticiones API-Football usadas "
-        f"en esta sesión"
+        f"ValueBet Pro V8 · "
+        f"{used_calls_footer} peticiones API-Football"
     )
 
 
