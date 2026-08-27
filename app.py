@@ -13,7 +13,7 @@ from typing import Optional, Dict, List, Tuple
 # ============================================================
 
 st.set_page_config(
-    page_title="ValueBet Pro V7",
+    page_title="ValueBet Pro V8",
     page_icon="⚽",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -227,6 +227,22 @@ def get_secret(name: str) -> Optional[str]:
 
 
 # ============================================================
+# CONTADOR DE PETICIONES API (clave en plan gratuito)
+# ============================================================
+#
+# API-Football free tier: 100 peticiones/día.
+# Este contador solo cuenta llamadas HTTP reales (no las que
+# vienen de la caché de st.cache_data), para que el usuario
+# sepa exactamente cuánta cuota ha gastado en la sesión.
+
+def register_api_call(api_name: str):
+    if "api_call_count" not in st.session_state:
+        st.session_state["api_call_count"] = {}
+    counts = st.session_state["api_call_count"]
+    counts[api_name] = counts.get(api_name, 0) + 1
+
+
+# ============================================================
 # HTTP API-FOOTBALL
 # ============================================================
 
@@ -256,6 +272,8 @@ def api_football_get(
     }
 
     try:
+
+        register_api_call("API-Football")
 
         response = requests.get(
             API_FOOTBALL_URL + endpoint,
@@ -319,6 +337,8 @@ def football_data_get(
     }
 
     try:
+
+        register_api_call("football-data.org")
 
         response = requests.get(
             FOOTBALL_DATA_URL + endpoint,
@@ -977,14 +997,41 @@ def build_pre_match_goal_expectancy(
     """
     Estima goles esperados combinando ataque y defensa históricos
     de ambos equipos.
+
+    Usa la media local/visitante cuando hay al menos
+    MIN_MATCHES_FOR_VENUE_SPLIT partidos en ese split; si no, cae a
+    la media global del equipo (goals_for_avg / goals_against_avg)
+    en vez de descartar el pronóstico por completo, lo cual era
+    frecuente con el histórico limitado del plan gratuito.
     """
     if not home_profile or not away_profile:
         return None, None
 
-    home_attack = home_profile.get("home_goals_for_avg")
-    home_defence = home_profile.get("home_goals_against_avg")
-    away_attack = away_profile.get("away_goals_for_avg")
-    away_defence = away_profile.get("away_goals_against_avg")
+    def pick(profile, venue_key, overall_key, raw_venue_key):
+        raw_values = profile.get(raw_venue_key, [])
+        if (
+            len(raw_values) >= MIN_MATCHES_FOR_VENUE_SPLIT
+            and profile.get(venue_key) is not None
+        ):
+            return profile.get(venue_key)
+        return profile.get(overall_key)
+
+    home_attack = pick(
+        home_profile, "home_goals_for_avg",
+        "goals_for_avg", "home_goals_for"
+    )
+    home_defence = pick(
+        home_profile, "home_goals_against_avg",
+        "goals_against_avg", "home_goals_against"
+    )
+    away_attack = pick(
+        away_profile, "away_goals_for_avg",
+        "goals_for_avg", "away_goals_for"
+    )
+    away_defence = pick(
+        away_profile, "away_goals_against_avg",
+        "goals_against_avg", "away_goals_against"
+    )
 
     if any(
         x is None
@@ -1019,9 +1066,11 @@ def get_historical_fixture_statistics(
     fixture_id: int
 ):
     """
-    Obtiene las estadísticas reales de un partido histórico.
-    Se utiliza únicamente para construir el perfil previo de los
-    equipos, nunca para predecir el propio partido.
+    Obtiene las estadísticas reales de UN partido histórico.
+    Se mantiene por compatibilidad, pero para varios partidos a la
+    vez usar get_historical_fixture_statistics_batch, que agrupa
+    hasta 20 IDs en una sola petición HTTP (crítico en plan
+    gratuito, 100 peticiones/día).
     """
     data, error = api_football_get(
         "/fixtures",
@@ -1041,6 +1090,70 @@ def get_historical_fixture_statistics(
     return fixtures[0], None
 
 
+@st.cache_data(ttl=21600)
+def get_historical_fixture_statistics_batch(
+    fixture_ids: Tuple[int, ...]
+):
+    """
+    Obtiene estadísticas de varios partidos históricos en el menor
+    número posible de peticiones HTTP, agrupando hasta 20 IDs por
+    llamada (límite del endpoint /fixtures?ids=... de API-Football).
+
+    Antes, build_complete_pre_match_team_profile pedía las
+    estadísticas de cada partido histórico UNA A UNA (hasta 20
+    peticiones por equipo, 40 por partido a pronosticar). Con el
+    plan gratuito eso agota la cuota diaria en un solo partido.
+    Con el batching, esos mismos 20 partidos históricos se piden
+    en 1 sola petición.
+    """
+
+    if not fixture_ids:
+        return {}, None
+
+    result_by_id = {}
+    error_out = None
+
+    ids_list = list(fixture_ids)
+
+    for i in range(0, len(ids_list), 20):
+
+        chunk = ids_list[i:i + 20]
+
+        ids_string = "-".join(str(x) for x in chunk)
+
+        data, error = api_football_get(
+            "/fixtures",
+            {
+                "ids": ids_string
+            }
+        )
+
+        if error:
+            error_out = error
+            continue
+
+        for fixture in data.get("response", []):
+
+            fixture_id = fixture.get(
+                "fixture", {}
+            ).get("id")
+
+            if fixture_id:
+                result_by_id[fixture_id] = fixture
+
+    return result_by_id, error_out
+
+
+MARKET_STAT_NAMES = [
+    "corners",
+    "shots",
+    "sot",
+    "yellow",
+    "red",
+    "saves",
+]
+
+
 def add_market_stats_to_team_profile(
     profile,
     fixture,
@@ -1048,7 +1161,13 @@ def add_market_stats_to_team_profile(
 ):
     """
     Añade al perfil las estadísticas del partido desde la perspectiva
-    del equipo: córners, tiros a puerta, tarjetas y paradas.
+    del equipo: córners, tiros, tiros a puerta, tarjetas y paradas.
+
+    Además de la lista global (*_for / *_against), guarda también
+    la versión separada por local/visitante (home_*_for, away_*_for,
+    ...), igual que ya se hacía con los goles. Esto importa porque
+    un equipo suele generar más córners/tiros jugando en casa, y
+    antes esa señal se perdía al mezclarlo todo en una sola media.
     """
     stats = fixture_statistics(fixture)
 
@@ -1059,9 +1178,11 @@ def add_market_stats_to_team_profile(
     if team_id == home_id:
         prefix = "home"
         opponent_prefix = "away"
+        venue = "home"
     elif team_id == away_id:
         prefix = "away"
         opponent_prefix = "home"
+        venue = "away"
     else:
         return
 
@@ -1081,31 +1202,35 @@ def add_market_stats_to_team_profile(
     }
 
     for profile_key, stat_key in mappings.items():
+
         value = stats.get(stat_key)
-        if value is not None:
-            profile.setdefault(profile_key, []).append(value)
+
+        if value is None:
+            continue
+
+        profile.setdefault(profile_key, []).append(value)
+
+        # Versión separada por local/visitante:
+        # p.ej. "home_corners_for" cuando el equipo jugaba en casa.
+        venue_key = f"{venue}_{profile_key}"
+        profile.setdefault(venue_key, []).append(value)
 
 
 def finalize_market_profile(profile):
     """
-    Convierte las listas históricas en medias.
+    Convierte las listas históricas (global y por local/visitante)
+    en medias.
     """
     result = dict(profile)
 
-    market_keys = [
-        "corners_for",
-        "corners_against",
-        "shots_for",
-        "shots_against",
-        "sot_for",
-        "sot_against",
-        "yellow_for",
-        "yellow_against",
-        "red_for",
-        "red_against",
-        "saves_for",
-        "saves_against",
-    ]
+    market_keys = []
+
+    for stat in MARKET_STAT_NAMES:
+        for direction in ["for", "against"]:
+            base = f"{stat}_{direction}"
+            market_keys.append(base)
+            market_keys.append(f"home_{base}")
+            market_keys.append(f"away_{base}")
 
     for key in market_keys:
         values = profile.get(key, [])
@@ -1114,29 +1239,38 @@ def finalize_market_profile(profile):
     return result
 
 
+@st.cache_data(ttl=21600)
 def build_complete_pre_match_team_profile(
     team_id: int,
     league_id: int,
     seasons: List[int],
-    reference_date: date
+    reference_date: date,
+    lookback_matches: int = 10,
 ):
     """
     Perfil completo de un equipo usando exclusivamente partidos de
     los 2 años anteriores al partido objetivo.
 
-    Incluye:
-    - goles
-    - córners
-    - tiros
-    - tiros a puerta
-    - tarjetas
-    - paradas
-    """
-    all_fixtures = []
+    Incluye: goles, córners, tiros, tiros a puerta, tarjetas y
+    paradas — cada uno también separado por local/visitante.
 
+    Optimizado para plan gratuito (100 peticiones/día):
+    1) Se cachea el perfil completo (ttl 6h) para no recalcularlo
+       si se vuelve a pedir el mismo equipo/jornada en la sesión.
+    2) Las temporadas se consultan en orden y se PARA en cuanto hay
+       partidos suficientes (lookback_matches) — antes se pedían
+       siempre las 3 temporadas aunque la más reciente ya tuviera
+       de sobra.
+    3) Las estadísticas detalladas de los partidos históricos se
+       piden en UNA sola llamada por lotes de hasta 20 IDs, en vez
+       de una llamada HTTP por cada partido histórico.
+    """
     start_date, end_date = historical_date_window(reference_date)
 
+    collected = {}
+
     for season in seasons:
+
         fixtures, error = get_team_historical_fixtures(
             team_id,
             league_id,
@@ -1145,15 +1279,29 @@ def build_complete_pre_match_team_profile(
         )
 
         if not error:
-            all_fixtures.extend(fixtures)
+            for fixture in fixtures:
+                fixture_id = fixture.get("fixture", {}).get("id")
+                if fixture_id:
+                    collected[fixture_id] = fixture
 
-    unique = {}
-    for fixture in all_fixtures:
-        fixture_id = fixture.get("fixture", {}).get("id")
-        if fixture_id:
-            unique[fixture_id] = fixture
+        # Early-stop: si ya tenemos partidos de sobra dentro de la
+        # ventana y anteriores al partido objetivo, no hace falta
+        # consultar temporadas más antiguas (ahorra peticiones).
+        already_enough = [
+            f for f in collected.values()
+            if (
+                parse_api_date(f.get("fixture", {}).get("date"))
+                is not None
+                and parse_api_date(
+                    f.get("fixture", {}).get("date")
+                ).date() < reference_date
+            )
+        ]
 
-    fixtures = list(unique.values())
+        if len(already_enough) >= lookback_matches:
+            break
+
+    fixtures = list(collected.values())
 
     # Solo partidos estrictamente anteriores al partido objetivo.
     fixtures = [
@@ -1174,6 +1322,8 @@ def build_complete_pre_match_team_profile(
         reverse=True
     )
 
+    fixtures = fixtures[:lookback_matches]
+
     profile = {
         "matches": 0,
         "goals_for": [],
@@ -1182,24 +1332,7 @@ def build_complete_pre_match_team_profile(
         "home_goals_against": [],
         "away_goals_for": [],
         "away_goals_against": [],
-
-        "corners_for": [],
-        "corners_against": [],
-        "shots_for": [],
-        "shots_against": [],
-        "sot_for": [],
-        "sot_against": [],
-        "yellow_for": [],
-        "yellow_against": [],
-        "red_for": [],
-        "red_against": [],
-        "saves_for": [],
-        "saves_against": [],
     }
-
-    # Limitamos el histórico utilizado a los últimos 20 partidos
-    # disponibles dentro de la ventana de 2 años.
-    fixtures = fixtures[:20]
 
     for fixture in fixtures:
         result = fixture_result_for_team(
@@ -1223,19 +1356,29 @@ def build_complete_pre_match_team_profile(
             profile["away_goals_for"].append(gf)
             profile["away_goals_against"].append(ga)
 
+    # Estadísticas de mercados (córners, tiros, tarjetas, paradas):
+    # se piden TODAS de golpe con el endpoint por lotes.
+    fixture_ids = tuple(
+        f.get("fixture", {}).get("id")
+        for f in fixtures
+        if f.get("fixture", {}).get("id")
+    )
+
+    details_by_id, _ = get_historical_fixture_statistics_batch(
+        fixture_ids
+    )
+
+    for fixture in fixtures:
+
         fixture_id = fixture.get("fixture", {}).get("id")
+        detail = details_by_id.get(fixture_id)
 
-        if fixture_id:
-            detail, error = get_historical_fixture_statistics(
-                fixture_id
+        if detail:
+            add_market_stats_to_team_profile(
+                profile,
+                detail,
+                team_id
             )
-
-            if detail and not error:
-                add_market_stats_to_team_profile(
-                    profile,
-                    detail,
-                    team_id
-                )
 
     result = {
         "matches": len(profile["goals_for"]),
@@ -1288,6 +1431,37 @@ def expected_from_profiles(
     return home_expected, away_expected
 
 
+MIN_MATCHES_FOR_VENUE_SPLIT = 3
+
+
+def venue_or_overall_key(profile, stat_base, venue):
+    """
+    Devuelve la clave de perfil a usar para un mercado: la versión
+    separada por local/visitante (p.ej. "home_corners_for_avg") si
+    hay al menos MIN_MATCHES_FOR_VENUE_SPLIT partidos con ese split,
+    o si no la media global ("corners_for_avg") como respaldo.
+
+    Con el histórico limitado del plan gratuito, exigir siempre el
+    split local/visitante dejaría a muchos equipos sin predicción
+    de mercados; este respaldo evita eso sin perder la señal cuando
+    sí hay datos suficientes.
+    """
+    venue_key = f"{venue}_{stat_base}"
+
+    # Reutilizamos la lista cruda (no solo la media) para contar
+    # cuántos partidos hay en ese split.
+    raw_key = venue_key.replace("_avg", "")
+    raw_values = profile.get(raw_key, [])
+
+    if (
+        len(raw_values) >= MIN_MATCHES_FOR_VENUE_SPLIT
+        and profile.get(venue_key) is not None
+    ):
+        return venue_key
+
+    return stat_base
+
+
 def build_market_predictions(
     home_profile,
     away_profile
@@ -1298,119 +1472,77 @@ def build_market_predictions(
     - tiros a puerta
     - tarjetas
     - paradas
+
+    Usa la media local del equipo local y la media visitante del
+    equipo visitante siempre que haya histórico suficiente
+    (>= MIN_MATCHES_FOR_VENUE_SPLIT partidos en ese split); si no,
+    cae a la media global del equipo.
     """
     predictions = []
 
-    # --------------------------------------------------------
-    # CÓRNERS
-    # --------------------------------------------------------
-    corners = expected_from_profiles(
-        home_profile,
-        away_profile,
-        "corners_for_avg",
-        "corners_against_avg",
-        "corners_for_avg",
-        "corners_against_avg"
-    )
+    market_defs = [
+        (
+            "corners_for_avg", "corners_against_avg",
+            "📐 Córners", [7.5, 8.5, 9.5, 10.5, 11.5]
+        ),
+        (
+            "sot_for_avg", "sot_against_avg",
+            "🎯 Tiros a puerta", [5.5, 6.5, 7.5, 8.5, 9.5, 10.5]
+        ),
+        (
+            "yellow_for_avg", "yellow_against_avg",
+            "🟨 Tarjetas", [2.5, 3.5, 4.5, 5.5, 6.5]
+        ),
+        (
+            "saves_for_avg", "saves_against_avg",
+            "🧤 Paradas", [2.5, 3.5, 4.5, 5.5, 6.5]
+        ),
+    ]
 
-    if corners:
-        expected_total = sum(corners)
+    for for_base, against_base, market_label, lines in market_defs:
 
-        for line in [7.5, 8.5, 9.5, 10.5, 11.5]:
+        home_for_key = venue_or_overall_key(
+            home_profile, for_base, "home"
+        )
+        home_against_key = venue_or_overall_key(
+            home_profile, against_base, "home"
+        )
+        away_for_key = venue_or_overall_key(
+            away_profile, for_base, "away"
+        )
+        away_against_key = venue_or_overall_key(
+            away_profile, against_base, "away"
+        )
+
+        expected = expected_from_profiles(
+            home_profile,
+            away_profile,
+            home_for_key,
+            home_against_key,
+            away_for_key,
+            away_against_key,
+        )
+
+        if not expected:
+            continue
+
+        expected_total = sum(expected)
+
+        for line in lines:
+
             probability = poisson_over(
                 expected_total,
                 line
             )
 
             predictions.append({
-                "market": "📐 Córners",
+                "market": market_label,
                 "selection": f"Más de {line}",
                 "probability": probability,
-                "source": "Histórico máximo 2 años · últimos 20 partidos"
-            })
-
-    # --------------------------------------------------------
-    # TIROS A PUERTA
-    # --------------------------------------------------------
-    sot = expected_from_profiles(
-        home_profile,
-        away_profile,
-        "sot_for_avg",
-        "sot_against_avg",
-        "sot_for_avg",
-        "sot_against_avg"
-    )
-
-    if sot:
-        expected_total = sum(sot)
-
-        for line in [5.5, 6.5, 7.5, 8.5, 9.5, 10.5]:
-            probability = poisson_over(
-                expected_total,
-                line
-            )
-
-            predictions.append({
-                "market": "🎯 Tiros a puerta",
-                "selection": f"Más de {line}",
-                "probability": probability,
-                "source": "Histórico máximo 2 años · últimos 20 partidos"
-            })
-
-    # --------------------------------------------------------
-    # TARJETAS
-    # --------------------------------------------------------
-    cards = expected_from_profiles(
-        home_profile,
-        away_profile,
-        "yellow_for_avg",
-        "yellow_against_avg",
-        "yellow_for_avg",
-        "yellow_against_avg"
-    )
-
-    if cards:
-        expected_total = sum(cards)
-
-        for line in [2.5, 3.5, 4.5, 5.5, 6.5]:
-            probability = poisson_over(
-                expected_total,
-                line
-            )
-
-            predictions.append({
-                "market": "🟨 Tarjetas",
-                "selection": f"Más de {line}",
-                "probability": probability,
-                "source": "Histórico máximo 2 años · últimos 20 partidos"
-            })
-
-    # --------------------------------------------------------
-    # PARADAS
-    # --------------------------------------------------------
-    saves = expected_from_profiles(
-        home_profile,
-        away_profile,
-        "saves_for_avg",
-        "saves_against_avg",
-        "saves_for_avg",
-        "saves_against_avg"
-    )
-
-    if saves:
-        expected_total = sum(saves)
-
-        for line in [2.5, 3.5, 4.5, 5.5, 6.5]:
-            probability = poisson_over(
-                expected_total,
-                line
-            )
-
-            predictions.append({
-                "market": "🧤 Paradas",
-                "selection": f"Más de {line}",
-                "probability": probability,
-                "source": "Histórico máximo 2 años · últimos 20 partidos"
+                "source": (
+                    "Histórico máx. 2 años · split local/visitante "
+                    "cuando hay datos suficientes"
+                )
             })
 
     return predictions
@@ -1523,7 +1655,8 @@ def calculate_ev(
 def build_match_predictions(
     fixture: Dict,
     league_id: int,
-    historical_seasons: List[int]
+    historical_seasons: List[int],
+    lookback_matches: int = 10,
 ):
     """
     Genera predicciones PRE-PARTIDO usando exclusivamente el histórico
@@ -1548,14 +1681,16 @@ def build_match_predictions(
         home_id,
         league_id,
         historical_seasons,
-        reference_date
+        reference_date,
+        lookback_matches,
     )
 
     away_profile = build_complete_pre_match_team_profile(
         away_id,
         league_id,
         historical_seasons,
-        reference_date
+        reference_date,
+        lookback_matches,
     )
 
     predictions = []
@@ -1577,7 +1712,10 @@ def build_match_predictions(
                     expected_goals,
                     line
                 ),
-                "source": "Histórico máximo 2 años · últimos 20 partidos"
+                "source": (
+                    f"Histórico máx. 2 años · últimos "
+                    f"{lookback_matches} partidos"
+                )
             })
 
     # Mercados solicitados
@@ -1786,6 +1924,24 @@ def extract_odds(
     return rows
 
 
+def translate_selection_to_odds_format(selection: str) -> str:
+    """
+    Las predicciones se generan en español ("Más de 8.5") pero
+    API-Football devuelve las cuotas con valores en inglés
+    ("Over 8.5"). Sin esta traducción, find_market_odds nunca
+    encontraba una cuota real y el cálculo de EV/Value quedaba
+    siempre vacío.
+    """
+
+    text = normalise_text(selection)
+
+    text = text.replace("más de", "over")
+    text = text.replace("mas de", "over")
+    text = text.replace("menos de", "under")
+
+    return text.strip()
+
+
 def find_market_odds(
     odds_rows,
     market,
@@ -1799,9 +1955,17 @@ def find_market_odds(
         market
     )
 
-    target_selection = normalise_text(
+    target_selection = translate_selection_to_odds_format(
         selection
     )
+
+    # Extraemos la línea numérica (p.ej. "8.5") para poder hacer
+    # un matching robusto aunque el formato del texto varíe entre
+    # casas de apuestas ("Over 8.5", "Más +8.5", etc.).
+    line_match = re.search(r"(\d+(?:\.\d+)?)", target_selection)
+    target_line = line_match.group(1) if line_match else None
+    target_is_over = "over" in target_selection
+    target_is_under = "under" in target_selection
 
     for row in odds_rows:
 
@@ -1817,16 +1981,33 @@ def find_market_odds(
             )
         )
 
-        if (
+        market_matches = (
             target_market in current_market
             or
             current_market in target_market
-        ):
+        )
 
-            if (
-                target_selection in
-                current_value
-            ):
+        if not market_matches:
+            continue
+
+        # 1) intento directo (por si algún bookmaker ya usa texto
+        #    equivalente al traducido)
+        if target_selection and target_selection in current_value:
+            return (
+                row["odd"],
+                row["bookmaker"]
+            )
+
+        # 2) intento por línea + dirección (over/under), que es el
+        #    formato real que devuelve API-Football
+        if target_line and (target_is_over or target_is_under):
+
+            direction_ok = (
+                (target_is_over and "over" in current_value)
+                or (target_is_under and "under" in current_value)
+            )
+
+            if direction_ok and target_line in current_value:
 
                 return (
                     row["odd"],
@@ -1843,7 +2024,8 @@ def find_market_odds(
 def create_predictions_for_fixture(
     fixture,
     league_id,
-    historical_seasons
+    historical_seasons,
+    lookback_matches=10,
 ):
 
     fixture_id = fixture[
@@ -1868,7 +2050,8 @@ def create_predictions_for_fixture(
         build_match_predictions(
             fixture,
             league_id,
-            historical_seasons
+            historical_seasons,
+            lookback_matches,
         )
     )
 
@@ -1910,23 +2093,32 @@ def create_predictions_for_fixture(
         # Convertimos nombres de UI a nombres
         # que normalmente aparecen en las casas/API.
 
-        if "Córners" in market:
+        # Usamos palabras clave cortas en vez de nombres completos:
+        # los bookmakers nombran los mercados de forma distinta
+        # ("Corners Over Under", "Total Corners", "Alternative
+        # Corners"...) y find_market_odds hace matching de
+        # substring en ambas direcciones + línea numérica exacta,
+        # así que la palabra clave es suficiente y más robusta.
 
-            api_market = "Corners"
+        if "Goles" in market:
+
+            api_market = "goals"
+
+        elif "Córners" in market:
+
+            api_market = "corners"
 
         elif "Tarjetas" in market:
 
-            api_market = "Total Cards"
+            api_market = "cards"
 
         elif "Tiros a puerta" in market:
 
-            api_market = (
-                "Shots on Goal"
-            )
+            api_market = "shots on goal"
 
         elif "Paradas" in market:
 
-            api_market = "Goalkeeper Saves"
+            api_market = "goalkeeper saves"
 
         else:
 
@@ -2034,6 +2226,125 @@ def create_predictions_for_fixture(
         })
 
     return output
+
+
+# ============================================================
+# CALIBRACIÓN (backtest ligero, opcional, bajo demanda)
+# ============================================================
+#
+# Esto NO es un backtest riguroso: usa los mismos partidos que
+# alimentan el histórico (evaluación dentro de muestra), porque en
+# plan gratuito no hay presupuesto de peticiones para reservar un
+# conjunto de partidos totalmente aparte. Sirve para detectar
+# errores burdos de calibración (p.ej. que el modelo prediga
+# sistemáticamente demasiado alto o demasiado bajo), no para
+# certificar la rentabilidad real del modelo.
+#
+# Importante: para cada partido de prueba, el perfil pre-partido
+# de cada equipo solo usa partidos ESTRICTAMENTE ANTERIORES a esa
+# fecha (ver build_complete_pre_match_team_profile), así que el
+# propio resultado del partido de prueba nunca se filtra hacia su
+# propia predicción.
+
+ACTUAL_MARKET_FIELDS = {
+    "📐 Córners": ("home_corners", "away_corners"),
+    "🎯 Tiros a puerta": ("home_sot", "away_sot"),
+    "🟨 Tarjetas": ("home_yellow", "away_yellow"),
+    "🧤 Paradas": ("home_saves", "away_saves"),
+}
+
+
+def run_calibration_check(
+    fixtures,
+    league_id,
+    historical_seasons,
+    lookback_matches,
+):
+    """
+    Para cada fixture FT recibido, genera las predicciones que se
+    habrían hecho ANTES del partido y las compara con lo que pasó
+    realmente. Devuelve una lista de filas para mostrar en tabla.
+    """
+    fixture_ids = tuple(
+        f.get("fixture", {}).get("id")
+        for f in fixtures
+        if f.get("fixture", {}).get("id")
+    )
+
+    details_by_id, _ = get_historical_fixture_statistics_batch(
+        fixture_ids
+    )
+
+    rows = []
+
+    for fixture in fixtures:
+
+        fixture_id = fixture.get("fixture", {}).get("id")
+        detail = details_by_id.get(fixture_id, fixture)
+
+        teams = fixture.get("teams", {})
+        home_name = teams.get("home", {}).get("name", "?")
+        away_name = teams.get("away", {}).get("name", "?")
+
+        goals = fixture.get("goals", {})
+        actual_home_goals = goals.get("home")
+        actual_away_goals = goals.get("away")
+
+        predictions = build_match_predictions(
+            fixture,
+            league_id,
+            historical_seasons,
+            lookback_matches,
+        )
+
+        actual_stats = fixture_statistics(detail)
+
+        for prediction in predictions:
+
+            market = prediction["market"]
+            probability = prediction["probability"]
+            selection = prediction["selection"]
+
+            if probability is None:
+                continue
+
+            line_match = re.search(
+                r"(\d+(?:\.\d+)?)", selection
+            )
+            if not line_match:
+                continue
+            line = float(line_match.group(1))
+
+            if market == "⚽ Goles":
+                if actual_home_goals is None or actual_away_goals is None:
+                    continue
+                actual_total = actual_home_goals + actual_away_goals
+
+            elif market in ACTUAL_MARKET_FIELDS:
+                home_field, away_field = ACTUAL_MARKET_FIELDS[market]
+                h = actual_stats.get(home_field)
+                a = actual_stats.get(away_field)
+                if h is None or a is None:
+                    continue
+                actual_total = h + a
+
+            else:
+                continue
+
+            hit = 1.0 if actual_total > line else 0.0
+            brier = (probability - hit) ** 2
+
+            rows.append({
+                "Partido": f"{home_name} vs {away_name}",
+                "Mercado": market,
+                "Selección": selection,
+                "Prob. predicha": f"{probability * 100:.1f}%",
+                "Total real": actual_total,
+                "Acierto": "✅" if hit == 1.0 else "❌",
+                "Brier": round(brier, 3),
+            })
+
+    return rows
 
 
 # ============================================================
@@ -2466,7 +2777,7 @@ def main():
 
     st.markdown(
         '<div class="main-title">'
-        '⚽ ValueBet Pro V7'
+        '⚽ ValueBet Pro V8'
         '</div>',
         unsafe_allow_html=True
     )
@@ -2523,12 +2834,51 @@ def main():
             1
         )
 
+        only_with_value = st.checkbox(
+            "Mostrar solo apuestas con Value real "
+            "(cuota disponible + EV ≥ mínimo)",
+            value=False,
+        )
+
+        st.divider()
+
+        st.subheader("📡 Consumo de API (plan gratuito)")
+
+        lookback_matches = st.slider(
+            "Partidos históricos por equipo (menos = "
+            "menos peticiones, más rápido)",
+            5,
+            20,
+            10,
+            1,
+            help=(
+                "Cada partido histórico usado para las "
+                "estadísticas de mercados (córners, tarjetas, "
+                "tiros, paradas) se agrupa en llamadas por "
+                "lotes de hasta 20 IDs, así que bajar este "
+                "número reduce sobre todo el nº de temporadas "
+                "que hace falta consultar."
+            ),
+        )
+
+        used_calls = st.session_state.get(
+            "api_call_count", {}
+        ).get("API-Football", 0)
+
+        st.caption(
+            f"Peticiones API-Football usadas en esta sesión: "
+            f"**{used_calls}** / ~100 diarias (plan gratuito)."
+        )
+
         st.divider()
 
         st.caption(
             "Las cuotas solo se consideran "
             "Value cuando existe una cuota "
-            "real devuelta por la API."
+            "real devuelta por la API. "
+            "Nota: el plan gratuito de API-Football no da "
+            "acceso a la temporada en curso para estas ligas; "
+            "solo a temporadas ya completadas."
         )
 
     competition = COMPETITIONS[
@@ -2617,12 +2967,14 @@ def main():
     (
         tab_predictions,
         tab_matches,
-        tab_table
+        tab_table,
+        tab_calibration,
     ) = st.tabs(
         [
             "🔮 Pronósticos",
             "📅 Partidos",
-            "🏆 Clasificación"
+            "🏆 Clasificación",
+            "🧪 Calibración",
         ]
     )
 
@@ -2674,15 +3026,71 @@ def main():
 
         else:
 
-            # Solo procesamos los partidos
-            # de la jornada seleccionada.
+            # --------------------------------------------------
+            # SELECCIÓN MANUAL DE PARTIDOS (control de cuota)
+            # --------------------------------------------------
             #
-            # Se consulta fixture por fixture
-            # para mantener controlado el consumo.
+            # Con plan gratuito (100 peticiones/día), calcular
+            # automáticamente TODOS los partidos de una jornada
+            # puede agotar la cuota en una sola jornada. Por eso
+            # el usuario elige explícitamente qué partidos quiere
+            # analizar.
+
+            upcoming = [
+                f for f in fixtures
+                if f["fixture"].get("status", {}).get("short")
+                in ["NS", "TBD"]
+            ]
+
+            if not upcoming:
+
+                st.info(
+                    "No hay partidos pendientes de jugar "
+                    "(NS/TBD) en esta jornada."
+                )
+
+                fixtures_to_analyze = []
+
+            else:
+
+                match_labels = {
+                    f"{f['teams']['home']['name']} vs "
+                    f"{f['teams']['away']['name']} "
+                    f"({local_date_string(f['fixture']['date'])})": f
+                    for f in upcoming
+                }
+
+                est_calls_per_match = (
+                    2 * (1 + 1) + 1
+                )  # ~2 equipos*(temporadas+detalle batch) + cuotas
+
+                selected_labels = st.multiselect(
+                    f"Partidos a analizar "
+                    f"(~{est_calls_per_match} peticiones "
+                    f"API-Football c/u con caché fría)",
+                    list(match_labels.keys()),
+                    default=list(match_labels.keys())[:1],
+                    key="prediction_fixture_select",
+                )
+
+                fixtures_to_analyze = [
+                    match_labels[label]
+                    for label in selected_labels
+                ]
+
+                used = st.session_state.get(
+                    "api_call_count", {}
+                ).get("API-Football", 0)
+
+                st.caption(
+                    f"📊 Peticiones a API-Football "
+                    f"en esta sesión: {used} "
+                    f"(plan gratuito ≈ 100/día)"
+                )
 
             prediction_rows = []
 
-            for fixture in fixtures:
+            for fixture in fixtures_to_analyze:
 
                 status = fixture[
                     "fixture"
@@ -2693,26 +3101,23 @@ def main():
                     "short"
                 )
 
-                # Los partidos futuros no tienen
-                # estadísticas del propio partido.
-                #
-                # Por tanto, no fabricamos pronósticos
-                # con datos inexistentes.
-                #
-                # En V7.1 añadiremos el histórico
-                # de partidos anteriores por equipo.
+                # Los pronósticos PRE-partido solo tienen sentido
+                # para partidos que todavía no se han jugado.
+                # (Bug corregido: antes se excluían justo los NS/TBD,
+                # es decir, se pronosticaban partidos ya en curso o
+                # finalizados y nunca los futuros.)
 
-                if status not in [
+                if status in [
                     "NS",
-                    "TBD",
-                    "PST"
+                    "TBD"
                 ]:
 
                     rows = (
                         create_predictions_for_fixture(
                             fixture,
                             league_id,
-                            historical_seasons
+                            historical_seasons,
+                            lookback_matches,
                         )
                     )
 
@@ -2755,6 +3160,39 @@ def main():
                         "No hay pronósticos que "
                         "superen la probabilidad "
                         "mínima seleccionada."
+                    )
+
+                else:
+
+                    # Filtro de EV mínimo (antes definido en la
+                    # barra lateral pero nunca aplicado).
+                    # Las filas sin cuota real (ev = None/NaN) se
+                    # mantienen salvo que el usuario pida
+                    # explícitamente "solo con Value real".
+
+                    ev_num = pd.to_numeric(
+                        predictions_df["ev"],
+                        errors="coerce"
+                    )
+
+                    if only_with_value:
+
+                        predictions_df = predictions_df[
+                            ev_num >= (min_ev / 100)
+                        ].copy()
+
+                    else:
+
+                        predictions_df = predictions_df[
+                            ev_num.isna()
+                            | (ev_num >= (min_ev / 100))
+                        ].copy()
+
+                if predictions_df.empty:
+
+                    st.info(
+                        "No hay pronósticos que superen "
+                        "el EV mínimo seleccionado."
                     )
 
                 else:
@@ -2909,14 +3347,145 @@ def main():
             )
 
     # ========================================================
+    # CALIBRACIÓN
+    # ========================================================
+
+    with tab_calibration:
+
+        st.markdown(
+            '<div class="section-title">'
+            '🧪 Calibración (opcional)'
+            '</div>',
+            unsafe_allow_html=True
+        )
+
+        st.caption(
+            "Comprueba, sobre partidos YA JUGADOS, si la "
+            "probabilidad que habría dado el modelo antes del "
+            "partido se ajusta a lo que pasó realmente. "
+            "⚠️ No es un backtest riguroso (usa datos dentro de la "
+            "misma ventana histórica), pero sirve para detectar "
+            "errores de calibración evidentes. Consume peticiones "
+            "API-Football — ejecútalo solo cuando quieras revisar "
+            "el modelo."
+        )
+
+        calibration_round = st.selectbox(
+            "Jornada ya finalizada a comprobar",
+            rounds,
+            key="calibration_round"
+        )
+
+        max_matches = st.slider(
+            "Nº de partidos a comprobar (más partidos = "
+            "más peticiones API)",
+            1, 5, 3, 1,
+            key="calibration_max_matches"
+        )
+
+        run_check = st.button(
+            "▶️ Ejecutar comprobación de calibración"
+        )
+
+        if run_check:
+
+            calib_fixtures, calib_error = get_fixtures_by_round(
+                league_id,
+                current_season,
+                calibration_round
+            )
+
+            if calib_error:
+
+                st.error(calib_error)
+
+            else:
+
+                finished = [
+                    f for f in calib_fixtures
+                    if f["fixture"].get("status", {}).get("short")
+                    == "FT"
+                ][:max_matches]
+
+                if not finished:
+
+                    st.info(
+                        "Esta jornada no tiene partidos finalizados "
+                        "(FT) todavía, o la API no los ha devuelto."
+                    )
+
+                else:
+
+                    with st.spinner(
+                        "Recalculando predicciones pre-partido "
+                        "y comparando con el resultado real..."
+                    ):
+
+                        calib_rows = run_calibration_check(
+                            finished,
+                            league_id,
+                            historical_seasons,
+                            lookback_matches,
+                        )
+
+                    if not calib_rows:
+
+                        st.info(
+                            "No se pudieron generar predicciones "
+                            "comparables (histórico insuficiente "
+                            "para estos equipos)."
+                        )
+
+                    else:
+
+                        calib_df = pd.DataFrame(calib_rows)
+
+                        hit_rate = (
+                            (calib_df["Acierto"] == "✅").mean()
+                            * 100
+                        )
+                        avg_brier = calib_df["Brier"].mean()
+
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            st.metric(
+                                "Acierto (Más de X)",
+                                f"{hit_rate:.1f}%"
+                            )
+
+                        with col2:
+                            st.metric(
+                                "Brier score medio",
+                                f"{avg_brier:.3f}",
+                                help=(
+                                    "0 = predicciones perfectas, "
+                                    "0.25 = equivalente a asignar "
+                                    "siempre 50%, más alto = peor."
+                                )
+                            )
+
+                        st.dataframe(
+                            calib_df,
+                            hide_index=True,
+                            use_container_width=True
+                        )
+
+    # ========================================================
     # FOOTER
     # ========================================================
 
     st.divider()
 
+    used_calls_footer = st.session_state.get(
+        "api_call_count", {}
+    ).get("API-Football", 0)
+
     st.caption(
-        "ValueBet Football Pro V7 · "
-        "Datos de API-Football + football-data.org"
+        f"ValueBet Football Pro V8 · "
+        f"Datos de API-Football + football-data.org · "
+        f"{used_calls_footer} peticiones API-Football usadas "
+        f"en esta sesión"
     )
 
 
