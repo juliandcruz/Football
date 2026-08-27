@@ -2078,6 +2078,14 @@ def create_predictions_for_fixture(
             ]
         )
 
+        # Si el modelo Poisson no pudo calcular una probabilidad
+        # (p.ej. valor esperado <= 0 o datos insuficientes), se
+        # descarta la fila en vez de dejar un None que rompe las
+        # comparaciones numéricas más adelante (predictions_df
+        # ["probability"] >= min_probability lanzaba TypeError).
+        if probability is None:
+            continue
+
         selection = (
             prediction[
                 "selection"
@@ -3140,11 +3148,17 @@ def main():
                     prediction_rows
                 )
 
+                # Blindaje adicional: nos aseguramos de que la
+                # columna sea numérica antes de comparar, para no
+                # romper si algún valor llega como None/NaN.
+                probability_num = pd.to_numeric(
+                    predictions_df["probability"],
+                    errors="coerce"
+                )
+
                 predictions_df = (
                     predictions_df[
-                        predictions_df[
-                            "probability"
-                        ]
+                        probability_num
                         >=
                         (
                             min_probability
