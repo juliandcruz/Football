@@ -44,9 +44,15 @@ def load_historical_csv_stats(competition="PD"):
     historical_stats = {}
     csv_file = f"historico_{competition}.csv"
     
+    # Plan B por si acaso se quedó con el nombre antiguo para La Liga
+    if competition == "PD" and not os.path.exists(csv_file) and os.path.exists("historico_liga.csv"):
+        csv_file = "historico_liga.csv"
+
     if os.path.exists(csv_file):
         try:
-            df_hist = pd.read_csv(csv_file)
+            # encoding='latin1' para evitar bloqueos con tildes o caracteres especiales del CSV
+            df_hist = pd.read_csv(csv_file, encoding='latin1')
+            
             if {'HomeTeam', 'AwayTeam', 'FTHG', 'FTAG'}.issubset(df_hist.columns):
                 for team in pd.concat([df_hist['HomeTeam'], df_hist['AwayTeam']]).unique():
                     home_games = df_hist[df_hist['HomeTeam'] == team]
@@ -55,15 +61,17 @@ def load_historical_csv_stats(competition="PD"):
                     h_gf = home_games['FTHG'].mean() if not home_games.empty else 1.3
                     h_ga = home_games['FTAG'].mean() if not home_games.empty else 1.3
                     a_gf = away_games['FTAG'].mean() if not away_games.empty else 1.1
-                    a_ga = home_games['FTHG'].mean() if not home_games.empty else 1.3
+                    a_ga = away_games['FTHG'].mean() if not away_games.empty else 1.3
                     
                     historical_stats[team] = {
                         "home_gf": h_gf, "home_ga": h_ga,
                         "away_gf": a_gf, "away_ga": a_ga
                     }
-            st.sidebar.success(f"📂 Histórico ({competition}) cargado: {len(historical_stats)} equipos.")
+                st.sidebar.success(f"📂 Histórico ({competition}) cargado: {len(historical_stats)} equipos.")
+            else:
+                st.sidebar.error("❌ El CSV no tiene las columnas requeridas (HomeTeam, AwayTeam, FTHG, FTAG).")
         except Exception as e:
-            st.sidebar.error(f"Error leyendo CSV: {e}")
+            st.sidebar.error(f"❌ Error al leer el CSV: {str(e)}")
     else:
         st.sidebar.warning(f"⚠️ No se encontró {csv_file}")
             
@@ -322,7 +330,7 @@ def main():
             st.success(f"Sugerencia para la mejor oportunidad ({s.home} vs {s.away}): **€{stake:.2f}** ({stake/bank*100:.1f}% de tu bank).")
 
     st.divider()
-    st.caption("ValueBet Football Pro V8.2 — Multi-League Hybrid Engine")
+    st.caption("ValueBet Football Pro V8.3 — Robust Hybrid API + CSV Engine")
 
 if __name__ == "__main__":
     main()
