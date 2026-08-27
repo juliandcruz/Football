@@ -1032,22 +1032,8 @@ def main():
     # HEADER
     # --------------------------------------------------------
 
-    st.markdown(
-        """
-        <div class="app-header">
-
-            <div class="app-title">
-                ⚽ ValueBet Pro
-            </div>
-
-            <div class="app-subtitle">
-                Análisis de mercados de fútbol
-            </div>
-
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+    st.title("⚽ ValueBet Pro")
+st.caption("Análisis de mercados de fútbol")
 
     # --------------------------------------------------------
     # CONFIG
