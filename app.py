@@ -120,11 +120,10 @@ def load_multimarket_data(competition="PD"):
                 match_time = ""
 
             h_gf, h_ga, a_gf, a_ga = league_avg_goals, league_avg_goals, league_avg_goals, league_avg_goals
-            h_c, a_c = 4.8, 4.2  # Medias de córners por defecto
-            h_y, a_y = 2.2, 2.4  # Medias de tarjetas por defecto
-            h_s, a_s = 4.5, 4.0  # Medias de tiros a puerta por defecto
+            h_c, a_c = 4.8, 4.2
+            h_y, a_y = 2.2, 2.4
+            h_s, a_s = 4.5, 4.0
 
-            # Extracción real y profunda del CSV histórico para este partido específico
             if not df_hist.empty and {'HomeTeam', 'AwayTeam', 'FTHG', 'FTAG'}.issubset(df_hist.columns):
                 csv_home = TEAM_MAPPING_PD.get(home, home)
                 csv_away = TEAM_MAPPING_PD.get(away, away)
@@ -146,7 +145,7 @@ def load_multimarket_data(competition="PD"):
                     if not away_games_as_home.empty:
                         hg_list.append(away_games_as_home['FTAG'].mean())
                         ha_list.append(away_games_as_home['FTHG'].mean())
-                        if 'AC' in away_games_as_home.empty == False and 'AC' in away_games_as_home.columns: hc_list.append(away_games_as_home['AC'].mean())
+                        if 'AC' in away_games_as_home.columns: hc_list.append(away_games_as_home['AC'].mean())
                         if 'AY' in away_games_as_home.columns: hy_list.append(away_games_as_home['AY'].mean())
                         if 'AST' in away_games_as_home.columns: hs_list.append(away_games_as_home['AST'].mean())
                     
@@ -177,7 +176,6 @@ def load_multimarket_data(competition="PD"):
                     if ay_list: a_y = sum(ay_list) / len(ay_list)
                     if as_list: a_s = sum(as_list) / len(as_list)
 
-            # Cálculo Poisson individual y totalmente diferenciado por cada equipo
             home_exp_g = max(0.3, (h_gf + a_ga) / 2)
             away_exp_g = max(0.3, (a_gf + h_ga) / 2)
             total_exp_goals = home_exp_g + away_exp_g
@@ -186,25 +184,21 @@ def load_multimarket_data(competition="PD"):
             exp_cards = max(1.5, h_y + a_y)
             exp_shots = max(3.0, h_s + a_s)
 
-            # Goles (+2.5)
             prob_goals = poisson_prob_over(total_exp_goals, 2.5)
             fair_g = 1 / prob_goals
             odds_g = round(fair_g * (0.95 + (abs(hash(home + away) % 20) / 100)), 2)
             ev_g = (prob_goals * odds_g) - 1
             
-            # Córners (+9.5)
             prob_corners = poisson_prob_over(exp_corners, 9.5)
             fair_c = 1 / prob_corners
             odds_c = round(fair_c * (0.95 + (abs(hash(away + home) % 20) / 100)), 2)
             ev_c = (prob_corners * odds_c) - 1
 
-            # Tarjetas (+4.5)
             prob_cards = poisson_prob_over(exp_cards, 4.5)
             fair_cards = 1 / prob_cards
             odds_cards = round(fair_cards * (0.95 + (abs(hash(home) % 20) / 100)), 2)
             ev_cards = (prob_cards * odds_cards) - 1
 
-            # Disparos a puerta (+8.5)
             prob_shots = poisson_prob_over(exp_shots, 8.5)
             fair_shots = 1 / prob_shots
             odds_shots = round(fair_shots * (0.95 + (abs(hash(away) % 20) / 100)), 2)
@@ -218,7 +212,7 @@ def load_multimarket_data(competition="PD"):
             ]
 
             for mkt, line, prob, odds, fair, ev in markets:
-                if prob >= 0.30:  # Umbral de filtro flexible
+                if prob >= 0.30:
                     rating = "🔥 VALUE" if ev > 0.02 else "⚖️ NEUTRAL"
                     parsed_data.append([
                         home, away, home_crest, away_crest, match_date_str, match_date_obj, match_time,
@@ -360,7 +354,7 @@ def main():
             st.success(f"Sugerencia para la mejor oportunidad ({s.home} vs {s.away}): **€{stake:.2f}** ({stake/bank*100:.1f}% de tu bank).")
 
     st.divider()
-    st.caption("ValueBet Football Pro V8.8 — True Historic Match Engine")
+    st.caption("ValueBet Football Pro V8.9 — True Historic Match Engine")
 
 if __name__ == "__main__":
     main()
