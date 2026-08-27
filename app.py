@@ -445,13 +445,12 @@ def _season_for_date(target_date: date) -> int:
     """
     Devuelve la temporada futbolística correspondiente a una fecha.
     Temporadas europeas: ago-dic = año actual, ene-jul = año anterior.
-    Limitado al rango permitido por el plan gratuito (2022-2024).
     """
     if target_date.month >= 8:
         season = target_date.year
     else:
         season = target_date.year - 1
-    return max(2022, min(season, 2024))
+    return season
 
 
 @st.cache_data(ttl=900)
@@ -3028,7 +3027,8 @@ def main():
     football_data_code = competition["football_data"]
 
     # Temporadas para el histórico
-    historical_seasons = [2024, 2023, 2022]
+    current_season = _season_for_date(target_date)
+    historical_seasons = [current_season, current_season - 1, current_season - 2]
 
     # --------------------------------------------------------
     # OBTENER PARTIDOS DEL DÍA
@@ -3104,10 +3104,18 @@ def main():
 
             est_calls = 2 * lookback_matches + 3
 
+            all_labels = list(match_labels.keys())
+
+            # Auto-seleccionar hasta 3 partidos para no
+            # excedir ~100 peticiones/día del plan gratuito.
+            max_auto = 3
+            safe_default = all_labels[:max_auto]
+
             selected_labels = st.multiselect(
-                f"Partidos a analizar (~{est_calls} peticiones c/u)",
-                list(match_labels.keys()),
-                default=[],
+                f"Partidos a analizar (~{est_calls} peticiones c/u, "
+                f"máx {max_auto} auto-seleccionados)",
+                all_labels,
+                default=safe_default,
                 key="prediction_fixture_select",
             )
 
@@ -3297,7 +3305,8 @@ def main():
             "en partidos ya jugados. Consume peticiones API."
         )
 
-        season_options = [2024, 2023, 2022]
+        current_season = _season_for_date(date.today())
+        season_options = [current_season, current_season - 1, current_season - 2]
         calib_season = st.selectbox(
             "Temporada",
             season_options,
