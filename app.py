@@ -98,11 +98,12 @@ def load_multimarket_data(competition="PD"):
         if os.path.exists(csv_file):
             try:
                 df_hist = pd.read_csv(csv_file, encoding='latin1')
+                df_hist.columns = df_hist.columns.str.replace('ï»¿', '').str.strip()
                 if 'HomeTeam' in df_hist.columns:
-                    df_hist['HomeTeam'] = df_hist['HomeTeam'].str.strip()
+                    df_hist['HomeTeam'] = df_hist['HomeTeam'].astype(str).str.strip()
                 if 'AwayTeam' in df_hist.columns:
-                    df_hist['AwayTeam'] = df_hist['AwayTeam'].str.strip()
-            except:
+                    df_hist['AwayTeam'] = df_hist['AwayTeam'].astype(str).str.strip()
+            except Exception as e:
                 pass
 
         parsed_data = []
