@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import requests
 import re
@@ -13,7 +14,7 @@ from difflib import SequenceMatcher
 # ============================================================
 
 st.set_page_config(
-    page_title="ValueBet Pro V7.4",
+    page_title="ValueBet Pro V7.5",
     page_icon="⚽",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -209,6 +210,15 @@ COMPETITIONS = {
         "football_data": "CL",
     },
 }
+
+
+# ============================================================
+# TEMPORADAS
+# ============================================================
+CURRENT_SEASON = date.today().year
+# Máximo de dos temporadas históricas anteriores al año actual.
+# En 2026: 2025 y 2024.
+HISTORICAL_SEASONS = [CURRENT_SEASON - 1, CURRENT_SEASON - 2]
 
 
 # ============================================================
@@ -872,23 +882,23 @@ def find_api_football_matches(
     # que API-Football pueda aceptar.
     # --------------------------------------------------------
 
-    preferred = [
-        2024,
-        2023,
-        2022,
-    ]
+    # Temporada actual para partidos actuales/futuros;
+    # como histórico, nunca más de las dos temporadas anteriores.
+    try:
+        start_year = int(str(start_date)[:4])
+        end_year = int(str(end_date)[:4])
+    except Exception:
+        start_year = CURRENT_SEASON
+        end_year = CURRENT_SEASON
 
-    accessible = [
-        y for y in preferred
-        if y in seasons
-    ]
+    requested_years = []
+    if start_year <= CURRENT_SEASON <= end_year:
+        requested_years.append(CURRENT_SEASON)
+    if end_year < CURRENT_SEASON:
+        requested_years.extend(HISTORICAL_SEASONS)
 
-    if not accessible:
-
-        accessible = [
-            y for y in seasons
-            if y <= 2024
-        ][:3]
+    requested_years = list(dict.fromkeys(requested_years))
+    accessible = [y for y in requested_years if y in seasons]
 
     if not accessible:
 
@@ -1827,6 +1837,61 @@ def render_summary(
 
 
 # ============================================================
+# WIDGET API-SPORTS
+# ============================================================
+def render_api_sports_games_widget(league_id, selected_date):
+    """Renderiza Games aislado del DOM principal de Streamlit."""
+    api_key = get_secret("API_FOOTBALL_KEY")
+    if not api_key:
+        st.warning("Falta API_FOOTBALL_KEY en Streamlit Secrets.")
+        return
+
+    safe_key = api_key.replace("&", "&amp;").replace('"', "&quot;")
+    safe_date = str(selected_date)
+    safe_league = str(int(league_id))
+
+    html = f"""
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+html,body {{ margin:0; padding:0; background:#fff; min-height:680px; font-family:Arial,sans-serif; }}
+api-sports-widget {{ display:block; width:100%; min-height:650px; }}
+</style>
+</head>
+<body>
+<api-sports-widget data-type="games"
+  data-date="{safe_date}"
+  data-games-style="1"
+  data-refresh="60"
+  data-league="{safe_league}"
+  data-tab="all">
+</api-sports-widget>
+
+<api-sports-widget data-type="config"
+  data-key="{safe_key}"
+  data-sport="football"
+  data-lang="es"
+  data-theme="white"
+  data-timezone="Europe/Madrid"
+  data-show-errors="true"
+  data-show-logos="true"
+  data-favorite="false"
+  data-refresh="60"
+  data-game-tab="statistics"
+  data-target-game="modal">
+</api-sports-widget>
+
+<script type="module" crossorigin src="https://widgets.api-sports.io/3.1.0/widgets.js"></script>
+</body>
+</html>
+"""
+    components.html(html, height=700, scrolling=True)
+
+
+# ============================================================
 # MAIN
 # ============================================================
 
@@ -1834,7 +1899,7 @@ def main():
 
     st.markdown(
         '<div class="app-title">'
-        '⚽ ValueBet Pro V7.4'
+        '⚽ ValueBet Pro V7.5'
         '</div>',
         unsafe_allow_html=True
     )
@@ -1876,7 +1941,7 @@ def main():
         st.divider()
 
         st.caption(
-            "La V7.4 utiliza "
+            "La V7.5 utiliza "
             "football-data.org como fuente "
             "principal del calendario."
         )
@@ -2049,12 +2114,14 @@ def main():
         tab_predictions,
         tab_matches,
         tab_table,
+        tab_widget,
         tab_status
     ) = st.tabs(
         [
             "🔮 Pronósticos",
             "📅 Partidos",
             "🏆 Clasificación",
+            "🧩 Widget",
             "🔧 Estado",
         ]
     )
@@ -2378,6 +2445,32 @@ def main():
             )
 
     # ========================================================
+    # WIDGET API-SPORTS
+    # ========================================================
+
+    with tab_widget:
+        st.markdown(
+            '<div class="section-title">🧩 Partidos con API-Sports</div>',
+            unsafe_allow_html=True
+        )
+        st.caption(
+            "El widget está aislado del resto de Streamlit. Si falla, la aplicación principal no se queda en blanco."
+        )
+        widget_date = st.date_input(
+            "Fecha del widget",
+            value=today,
+            key="widget_date"
+        )
+        st.info(
+            f"Liga: {competition_name} · ID {league_id} · {widget_date.strftime('%d/%m/%Y')}"
+        )
+        try:
+            render_api_sports_games_widget(league_id, widget_date.isoformat())
+        except Exception as exc:
+            st.error("El widget no se pudo cargar, pero el resto de la aplicación sigue disponible.")
+            st.code(str(exc))
+
+    # ========================================================
     # ESTADO
     # ========================================================
 
@@ -2451,3 +2544,7 @@ def main():
         )
 
         # ------------------------------------------------
+
+
+if __name__ == "__main__":
+    main()
