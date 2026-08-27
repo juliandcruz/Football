@@ -2495,25 +2495,14 @@ def main():
             )
         )
 
-        current_year = date.today().year
-        # Las temporadas europeas van de ago a may.
-        # De ene-may estamos en la 2ª mitad de la temporada
-        # que empezó el año anterior.
-        current_month = date.today().month
-        default_season = (
-            current_year - 1
-            if current_month <= 5
-            else current_year
-        )
-        season_options = list(range(current_year, current_year - 5, -1))
-        default_index = 0
-        if default_season in season_options:
-            default_index = season_options.index(default_season)
+        # API-Football free plan: solo permite
+        # temporadas 2022, 2023 y 2024.
+        season_options = [2024, 2023, 2022]
 
         season = st.selectbox(
             "Temporada disponible",
             season_options,
-            index=default_index
+            index=0
         )
 
         st.divider()
