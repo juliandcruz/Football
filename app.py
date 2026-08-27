@@ -457,28 +457,44 @@ def _season_for_date(target_date: date) -> int:
 def get_today_fixtures(
     league_id: int,
     target_date: date,
-    season: int = None,
 ):
     """
     Obtiene los partidos de una fecha concreta para una liga.
-    Incluye 'season' porque API-Football lo exige siempre.
-    """
-    if season is None:
-        season = _season_for_date(target_date)
 
+    Estrategia 1: league + from/to (sin season).
+    Estrategia 2: league + season=2024 + from/to.
+    """
+    date_str = target_date.isoformat()
+
+    # Estrategia 1: solo league + from/to (sin season)
     data, error = api_football_get(
         "/fixtures",
         {
             "league": league_id,
-            "season": season,
-            "date": target_date.isoformat(),
+            "from": date_str,
+            "to": date_str,
         }
     )
 
-    if error:
-        return [], error
+    if not error:
+        return data.get("response", []), None
 
-    return data.get("response", []), None
+    # Estrategia 2: con season=2024 + from/to
+    for season in [2024, 2023, 2022]:
+        data2, error2 = api_football_get(
+            "/fixtures",
+            {
+                "league": league_id,
+                "season": season,
+                "from": date_str,
+                "to": date_str,
+            }
+        )
+        if not error2:
+            return data2.get("response", []), None
+
+    # Si nada funciona, devolver el error original
+    return [], error
 
 
 # ============================================================
@@ -3019,18 +3035,17 @@ def main():
         st.divider()
 
         st.caption(
-            "El histórico se obtiene de 2022-2024 "
-            "(plan gratuito). Los partidos del día "
-            "se piden por fecha sin usar season."
+            "Plan gratuito: temporadas 2022-2024. "
+            "Partidos del día se obtienen con "
+            "from/to sin season."
         )
 
     competition = COMPETITIONS[competition_name]
     league_id = competition["api_football"]
     football_data_code = competition["football_data"]
 
-    # Temporadas para el histórico
-    current_season = _season_for_date(target_date)
-    historical_seasons = [current_season, current_season - 1, current_season - 2]
+    # Temporadas para el histórico (plan gratuito: 2022-2024)
+    historical_seasons = [2024, 2023, 2022]
 
     # --------------------------------------------------------
     # OBTENER PARTIDOS DEL DÍA
@@ -3367,11 +3382,9 @@ def main():
             "en partidos ya jugados. Consume peticiones API."
         )
 
-        current_season = _season_for_date(date.today())
-        season_options = [current_season, current_season - 1, current_season - 2]
         calib_season = st.selectbox(
             "Temporada",
-            season_options,
+            [2024, 2023, 2022],
             index=0,
             key="calibration_season"
         )
