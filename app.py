@@ -4,7 +4,7 @@ import numpy as np
 import requests
 import math
 import re
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone, date, timedelta
 from typing import Optional, Dict, List, Tuple
 
 
@@ -763,6 +763,660 @@ def fixture_statistics(
     }
 
 
+
+# ============================================================
+# HISTÓRICO MÁXIMO DE 2 AÑOS
+# ============================================================
+
+HISTORICAL_YEARS = 2
+
+
+def historical_date_window(reference_date=None):
+    """
+    Devuelve la ventana histórica permitida:
+    desde un máximo de 2 años antes hasta la fecha de referencia.
+    """
+    if reference_date is None:
+        reference_date = date.today()
+
+    end_date = reference_date
+    start_date = end_date - timedelta(days=365 * HISTORICAL_YEARS)
+    return start_date, end_date
+
+
+@st.cache_data(ttl=21600)
+def get_team_historical_fixtures(
+    team_id: int,
+    league_id: int,
+    season: int,
+    reference_date: date
+):
+    """
+    Obtiene partidos históricos del equipo y limita los datos a
+    los 2 años anteriores a reference_date.
+
+    El filtro de fechas se hace también localmente para garantizar
+    que nunca entren partidos anteriores a la ventana permitida.
+    """
+    start_date, end_date = historical_date_window(reference_date)
+
+    data, error = api_football_get(
+        "/fixtures",
+        {
+            "team": team_id,
+            "league": league_id,
+            "season": season,
+            "from": start_date.isoformat(),
+            "to": end_date.isoformat(),
+            "status": "FT"
+        }
+    )
+
+    if error:
+        return [], error
+
+    fixtures = data.get("response", [])
+
+    filtered = []
+
+    for fixture in fixtures:
+        fixture_date_raw = fixture.get("fixture", {}).get("date")
+        fixture_date = parse_api_date(fixture_date_raw)
+
+        if not fixture_date:
+            continue
+
+        fixture_day = fixture_date.date()
+
+        if start_date <= fixture_day <= end_date:
+            filtered.append(fixture)
+
+    return filtered, None
+
+
+def fixture_result_for_team(fixture, team_id):
+    """
+    Extrae estadísticas/resultados de un partido desde la perspectiva
+    del equipo indicado.
+    """
+    teams = fixture.get("teams", {})
+    home = teams.get("home", {})
+    away = teams.get("away", {})
+    goals = fixture.get("goals", {})
+
+    is_home = home.get("id") == team_id
+    is_away = away.get("id") == team_id
+
+    if not (is_home or is_away):
+        return None
+
+    if is_home:
+        team_goals = goals.get("home")
+        opponent_goals = goals.get("away")
+        team_stats = "home"
+        opponent_stats = "away"
+    else:
+        team_goals = goals.get("away")
+        opponent_goals = goals.get("home")
+        team_stats = "away"
+        opponent_stats = "home"
+
+    if team_goals is None or opponent_goals is None:
+        return None
+
+    return {
+        "team_goals": team_goals,
+        "opponent_goals": opponent_goals,
+        "is_home": is_home,
+        "team_stats": team_stats,
+        "opponent_stats": opponent_stats,
+        "date": fixture.get("fixture", {}).get("date")
+    }
+
+
+def historical_average(values):
+    """Media segura de una lista de valores numéricos."""
+    clean = [float(v) for v in values if v is not None]
+
+    if not clean:
+        return None
+
+    return sum(clean) / len(clean)
+
+
+def build_pre_match_team_profile(
+    team_id: int,
+    league_id: int,
+    seasons: List[int],
+    reference_date: date
+):
+    """
+    Construye un perfil prepartido usando exclusivamente partidos
+    comprendidos dentro de los 2 años anteriores a reference_date.
+
+    Importante:
+    este perfil NO utiliza las estadísticas del partido que se quiere
+    pronosticar.
+    """
+    all_fixtures = []
+
+    for season in seasons:
+        fixtures, error = get_team_historical_fixtures(
+            team_id,
+            league_id,
+            season,
+            reference_date
+        )
+
+        if error:
+            continue
+
+        all_fixtures.extend(fixtures)
+
+    # Deducción de duplicados por ID de fixture
+    unique = {}
+    for fixture in all_fixtures:
+        fixture_id = fixture.get("fixture", {}).get("id")
+        if fixture_id:
+            unique[fixture_id] = fixture
+
+    fixtures = list(unique.values())
+
+    # Orden más reciente primero
+    fixtures.sort(
+        key=lambda f: f.get("fixture", {}).get("date") or "",
+        reverse=True
+    )
+
+    profile = {
+        "matches": len(fixtures),
+        "goals_for": [],
+        "goals_against": [],
+        "home_goals_for": [],
+        "home_goals_against": [],
+        "away_goals_for": [],
+        "away_goals_against": []
+    }
+
+    for fixture in fixtures:
+        result = fixture_result_for_team(fixture, team_id)
+
+        if not result:
+            continue
+
+        gf = result["team_goals"]
+        ga = result["opponent_goals"]
+
+        profile["goals_for"].append(gf)
+        profile["goals_against"].append(ga)
+
+        if result["is_home"]:
+            profile["home_goals_for"].append(gf)
+            profile["home_goals_against"].append(ga)
+        else:
+            profile["away_goals_for"].append(gf)
+            profile["away_goals_against"].append(ga)
+
+    return {
+        "matches": len(profile["goals_for"]),
+        "goals_for_avg": historical_average(profile["goals_for"]),
+        "goals_against_avg": historical_average(profile["goals_against"]),
+        "home_goals_for_avg": historical_average(profile["home_goals_for"]),
+        "home_goals_against_avg": historical_average(profile["home_goals_against"]),
+        "away_goals_for_avg": historical_average(profile["away_goals_for"]),
+        "away_goals_against_avg": historical_average(profile["away_goals_against"]),
+        "window_start": historical_date_window(reference_date)[0],
+        "window_end": historical_date_window(reference_date)[1]
+    }
+
+
+def build_pre_match_goal_expectancy(
+    home_profile,
+    away_profile
+):
+    """
+    Estima goles esperados combinando ataque y defensa históricos
+    de ambos equipos.
+    """
+    if not home_profile or not away_profile:
+        return None, None
+
+    home_attack = home_profile.get("home_goals_for_avg")
+    home_defence = home_profile.get("home_goals_against_avg")
+    away_attack = away_profile.get("away_goals_for_avg")
+    away_defence = away_profile.get("away_goals_against_avg")
+
+    if any(
+        x is None
+        for x in [
+            home_attack,
+            home_defence,
+            away_attack,
+            away_defence
+        ]
+    ):
+        return None, None
+
+    expected_home = (
+        home_attack + away_defence
+    ) / 2
+
+    expected_away = (
+        away_attack + home_defence
+    ) / 2
+
+    return expected_home, expected_away
+
+
+
+
+# ============================================================
+# ESTADÍSTICAS HISTÓRICAS PARA MERCADOS
+# ============================================================
+
+@st.cache_data(ttl=21600)
+def get_historical_fixture_statistics(
+    fixture_id: int
+):
+    """
+    Obtiene las estadísticas reales de un partido histórico.
+    Se utiliza únicamente para construir el perfil previo de los
+    equipos, nunca para predecir el propio partido.
+    """
+    data, error = api_football_get(
+        "/fixtures",
+        {
+            "id": fixture_id
+        }
+    )
+
+    if error:
+        return None, error
+
+    fixtures = data.get("response", [])
+
+    if not fixtures:
+        return None, None
+
+    return fixtures[0], None
+
+
+def add_market_stats_to_team_profile(
+    profile,
+    fixture,
+    team_id
+):
+    """
+    Añade al perfil las estadísticas del partido desde la perspectiva
+    del equipo: córners, tiros a puerta, tarjetas y paradas.
+    """
+    stats = fixture_statistics(fixture)
+
+    teams = fixture.get("teams", {})
+    home_id = teams.get("home", {}).get("id")
+    away_id = teams.get("away", {}).get("id")
+
+    if team_id == home_id:
+        prefix = "home"
+        opponent_prefix = "away"
+    elif team_id == away_id:
+        prefix = "away"
+        opponent_prefix = "home"
+    else:
+        return
+
+    mappings = {
+        "corners_for": f"{prefix}_corners",
+        "corners_against": f"{opponent_prefix}_corners",
+        "shots_for": f"{prefix}_shots",
+        "shots_against": f"{opponent_prefix}_shots",
+        "sot_for": f"{prefix}_sot",
+        "sot_against": f"{opponent_prefix}_sot",
+        "yellow_for": f"{prefix}_yellow",
+        "yellow_against": f"{opponent_prefix}_yellow",
+        "red_for": f"{prefix}_red",
+        "red_against": f"{opponent_prefix}_red",
+        "saves_for": f"{prefix}_saves",
+        "saves_against": f"{opponent_prefix}_saves",
+    }
+
+    for profile_key, stat_key in mappings.items():
+        value = stats.get(stat_key)
+        if value is not None:
+            profile.setdefault(profile_key, []).append(value)
+
+
+def finalize_market_profile(profile):
+    """
+    Convierte las listas históricas en medias.
+    """
+    result = dict(profile)
+
+    market_keys = [
+        "corners_for",
+        "corners_against",
+        "shots_for",
+        "shots_against",
+        "sot_for",
+        "sot_against",
+        "yellow_for",
+        "yellow_against",
+        "red_for",
+        "red_against",
+        "saves_for",
+        "saves_against",
+    ]
+
+    for key in market_keys:
+        values = profile.get(key, [])
+        result[f"{key}_avg"] = historical_average(values)
+
+    return result
+
+
+def build_complete_pre_match_team_profile(
+    team_id: int,
+    league_id: int,
+    seasons: List[int],
+    reference_date: date
+):
+    """
+    Perfil completo de un equipo usando exclusivamente partidos de
+    los 2 años anteriores al partido objetivo.
+
+    Incluye:
+    - goles
+    - córners
+    - tiros
+    - tiros a puerta
+    - tarjetas
+    - paradas
+    """
+    all_fixtures = []
+
+    start_date, end_date = historical_date_window(reference_date)
+
+    for season in seasons:
+        fixtures, error = get_team_historical_fixtures(
+            team_id,
+            league_id,
+            season,
+            reference_date
+        )
+
+        if not error:
+            all_fixtures.extend(fixtures)
+
+    unique = {}
+    for fixture in all_fixtures:
+        fixture_id = fixture.get("fixture", {}).get("id")
+        if fixture_id:
+            unique[fixture_id] = fixture
+
+    fixtures = list(unique.values())
+
+    # Solo partidos estrictamente anteriores al partido objetivo.
+    fixtures = [
+        f for f in fixtures
+        if (
+            parse_api_date(
+                f.get("fixture", {}).get("date")
+            ) is not None
+            and
+            parse_api_date(
+                f.get("fixture", {}).get("date")
+            ).date() < reference_date
+        )
+    ]
+
+    fixtures.sort(
+        key=lambda f: f.get("fixture", {}).get("date") or "",
+        reverse=True
+    )
+
+    profile = {
+        "matches": 0,
+        "goals_for": [],
+        "goals_against": [],
+        "home_goals_for": [],
+        "home_goals_against": [],
+        "away_goals_for": [],
+        "away_goals_against": [],
+
+        "corners_for": [],
+        "corners_against": [],
+        "shots_for": [],
+        "shots_against": [],
+        "sot_for": [],
+        "sot_against": [],
+        "yellow_for": [],
+        "yellow_against": [],
+        "red_for": [],
+        "red_against": [],
+        "saves_for": [],
+        "saves_against": [],
+    }
+
+    # Limitamos el histórico utilizado a los últimos 20 partidos
+    # disponibles dentro de la ventana de 2 años.
+    fixtures = fixtures[:20]
+
+    for fixture in fixtures:
+        result = fixture_result_for_team(
+            fixture,
+            team_id
+        )
+
+        if not result:
+            continue
+
+        gf = result["team_goals"]
+        ga = result["opponent_goals"]
+
+        profile["goals_for"].append(gf)
+        profile["goals_against"].append(ga)
+
+        if result["is_home"]:
+            profile["home_goals_for"].append(gf)
+            profile["home_goals_against"].append(ga)
+        else:
+            profile["away_goals_for"].append(gf)
+            profile["away_goals_against"].append(ga)
+
+        fixture_id = fixture.get("fixture", {}).get("id")
+
+        if fixture_id:
+            detail, error = get_historical_fixture_statistics(
+                fixture_id
+            )
+
+            if detail and not error:
+                add_market_stats_to_team_profile(
+                    profile,
+                    detail,
+                    team_id
+                )
+
+    result = {
+        "matches": len(profile["goals_for"]),
+        "goals_for_avg": historical_average(profile["goals_for"]),
+        "goals_against_avg": historical_average(profile["goals_against"]),
+        "home_goals_for_avg": historical_average(profile["home_goals_for"]),
+        "home_goals_against_avg": historical_average(profile["home_goals_against"]),
+        "away_goals_for_avg": historical_average(profile["away_goals_for"]),
+        "away_goals_against_avg": historical_average(profile["away_goals_against"]),
+        "window_start": start_date,
+        "window_end": end_date,
+    }
+
+    result.update(finalize_market_profile(profile))
+
+    return result
+
+
+def expected_from_profiles(
+    home_profile,
+    away_profile,
+    home_for_key,
+    home_against_key,
+    away_for_key,
+    away_against_key
+):
+    """
+    Combina ataque/ofensiva y concesión defensiva de ambos equipos.
+    """
+    values = [
+        home_profile.get(home_for_key),
+        home_profile.get(home_against_key),
+        away_profile.get(away_for_key),
+        away_profile.get(away_against_key),
+    ]
+
+    if any(v is None for v in values):
+        return None
+
+    home_expected = (
+        home_profile[home_for_key] +
+        away_profile[away_against_key]
+    ) / 2
+
+    away_expected = (
+        away_profile[away_for_key] +
+        home_profile[home_against_key]
+    ) / 2
+
+    return home_expected, away_expected
+
+
+def build_market_predictions(
+    home_profile,
+    away_profile
+):
+    """
+    Genera probabilidades prepartido para:
+    - córners
+    - tiros a puerta
+    - tarjetas
+    - paradas
+    """
+    predictions = []
+
+    # --------------------------------------------------------
+    # CÓRNERS
+    # --------------------------------------------------------
+    corners = expected_from_profiles(
+        home_profile,
+        away_profile,
+        "corners_for_avg",
+        "corners_against_avg",
+        "corners_for_avg",
+        "corners_against_avg"
+    )
+
+    if corners:
+        expected_total = sum(corners)
+
+        for line in [7.5, 8.5, 9.5, 10.5, 11.5]:
+            probability = poisson_over(
+                expected_total,
+                line
+            )
+
+            predictions.append({
+                "market": "📐 Córners",
+                "selection": f"Más de {line}",
+                "probability": probability,
+                "source": "Histórico máximo 2 años · últimos 20 partidos"
+            })
+
+    # --------------------------------------------------------
+    # TIROS A PUERTA
+    # --------------------------------------------------------
+    sot = expected_from_profiles(
+        home_profile,
+        away_profile,
+        "sot_for_avg",
+        "sot_against_avg",
+        "sot_for_avg",
+        "sot_against_avg"
+    )
+
+    if sot:
+        expected_total = sum(sot)
+
+        for line in [5.5, 6.5, 7.5, 8.5, 9.5, 10.5]:
+            probability = poisson_over(
+                expected_total,
+                line
+            )
+
+            predictions.append({
+                "market": "🎯 Tiros a puerta",
+                "selection": f"Más de {line}",
+                "probability": probability,
+                "source": "Histórico máximo 2 años · últimos 20 partidos"
+            })
+
+    # --------------------------------------------------------
+    # TARJETAS
+    # --------------------------------------------------------
+    cards = expected_from_profiles(
+        home_profile,
+        away_profile,
+        "yellow_for_avg",
+        "yellow_against_avg",
+        "yellow_for_avg",
+        "yellow_against_avg"
+    )
+
+    if cards:
+        expected_total = sum(cards)
+
+        for line in [2.5, 3.5, 4.5, 5.5, 6.5]:
+            probability = poisson_over(
+                expected_total,
+                line
+            )
+
+            predictions.append({
+                "market": "🟨 Tarjetas",
+                "selection": f"Más de {line}",
+                "probability": probability,
+                "source": "Histórico máximo 2 años · últimos 20 partidos"
+            })
+
+    # --------------------------------------------------------
+    # PARADAS
+    # --------------------------------------------------------
+    saves = expected_from_profiles(
+        home_profile,
+        away_profile,
+        "saves_for_avg",
+        "saves_against_avg",
+        "saves_for_avg",
+        "saves_against_avg"
+    )
+
+    if saves:
+        expected_total = sum(saves)
+
+        for line in [2.5, 3.5, 4.5, 5.5, 6.5]:
+            probability = poisson_over(
+                expected_total,
+                line
+            )
+
+            predictions.append({
+                "market": "🧤 Paradas",
+                "selection": f"Más de {line}",
+                "probability": probability,
+                "source": "Histórico máximo 2 años · últimos 20 partidos"
+            })
+
+    return predictions
+
+
+
 # ============================================================
 # MODELOS
 # ============================================================
@@ -867,237 +1521,72 @@ def calculate_ev(
 # ============================================================
 
 def build_match_predictions(
-    fixture: Dict
+    fixture: Dict,
+    league_id: int,
+    historical_seasons: List[int]
 ):
+    """
+    Genera predicciones PRE-PARTIDO usando exclusivamente el histórico
+    permitido de los 2 años anteriores al encuentro.
+    """
+    teams = fixture.get("teams", {})
+    home = teams.get("home", {})
+    away = teams.get("away", {})
 
-    stats = fixture_statistics(
-        fixture
+    home_id = home.get("id")
+    away_id = away.get("id")
+
+    fixture_date_raw = fixture.get("fixture", {}).get("date")
+    fixture_dt = parse_api_date(fixture_date_raw)
+
+    if not home_id or not away_id or not fixture_dt:
+        return []
+
+    reference_date = fixture_dt.date()
+
+    home_profile = build_complete_pre_match_team_profile(
+        home_id,
+        league_id,
+        historical_seasons,
+        reference_date
     )
 
-    home = fixture[
-        "teams"
-    ][
-        "home"
-    ]
-
-    away = fixture[
-        "teams"
-    ][
-        "away"
-    ]
-
-    home_name = home.get(
-        "name",
-        "Local"
-    )
-
-    away_name = away.get(
-        "name",
-        "Visitante"
+    away_profile = build_complete_pre_match_team_profile(
+        away_id,
+        league_id,
+        historical_seasons,
+        reference_date
     )
 
     predictions = []
 
-    # --------------------------------------------------------
-    # CÓRNERS
-    # --------------------------------------------------------
+    # Goles
+    expected_home, expected_away = build_pre_match_goal_expectancy(
+        home_profile,
+        away_profile
+    )
 
-    hc = stats[
-        "home_corners"
-    ]
+    if expected_home is not None and expected_away is not None:
+        expected_goals = expected_home + expected_away
 
-    ac = stats[
-        "away_corners"
-    ]
-
-    if (
-        hc is not None
-        and ac is not None
-    ):
-
-        total = hc + ac
-
-        for line in [
-            7.5,
-            8.5,
-            9.5,
-            10.5,
-            11.5
-        ]:
-
-            # Para un partido ya jugado no queremos usar
-            # la estadística final como predictor del propio
-            # partido. Por eso estas predicciones se utilizan
-            # solamente para análisis de partidos finalizados.
-            #
-            # La V7 marcará estos datos como HISTÓRICOS.
-
-            probability = poisson_over(
-                total,
-                line
-            )
-
+        for line in [0.5, 1.5, 2.5, 3.5, 4.5]:
             predictions.append({
-
-                "market":
-                "📐 Córners",
-
-                "selection":
-                f"Más de {line}",
-
-                "probability":
-                probability,
-
-                "source":
-                "Estadística real del partido",
-
+                "market": "⚽ Goles",
+                "selection": f"Más de {line}",
+                "probability": poisson_over(
+                    expected_goals,
+                    line
+                ),
+                "source": "Histórico máximo 2 años · últimos 20 partidos"
             })
 
-    # --------------------------------------------------------
-    # TIROS A PUERTA
-    # --------------------------------------------------------
-
-    hs = stats[
-        "home_sot"
-    ]
-
-    ass = stats[
-        "away_sot"
-    ]
-
-    if (
-        hs is not None
-        and ass is not None
-    ):
-
-        total_sot = hs + ass
-
-        for line in [
-            6.5,
-            7.5,
-            8.5,
-            9.5,
-            10.5
-        ]:
-
-            probability = poisson_over(
-                total_sot,
-                line
-            )
-
-            predictions.append({
-
-                "market":
-                "🎯 Tiros a puerta",
-
-                "selection":
-                f"Más de {line}",
-
-                "probability":
-                probability,
-
-                "source":
-                "Estadística real del partido",
-
-            })
-
-    # --------------------------------------------------------
-    # TARJETAS
-    # --------------------------------------------------------
-
-    hy = stats[
-        "home_yellow"
-    ]
-
-    ay = stats[
-        "away_yellow"
-    ]
-
-    if (
-        hy is not None
-        and ay is not None
-    ):
-
-        total_cards = hy + ay
-
-        for line in [
-            2.5,
-            3.5,
-            4.5,
-            5.5,
-            6.5
-        ]:
-
-            probability = poisson_over(
-                total_cards,
-                line
-            )
-
-            predictions.append({
-
-                "market":
-                "🟨 Tarjetas",
-
-                "selection":
-                f"Más de {line}",
-
-                "probability":
-                probability,
-
-                "source":
-                "Estadística real del partido",
-
-            })
-
-    # --------------------------------------------------------
-    # PARADAS
-    # --------------------------------------------------------
-
-    hsaves = stats[
-        "home_saves"
-    ]
-
-    asaves = stats[
-        "away_saves"
-    ]
-
-    if (
-        hsaves is not None
-        and asaves is not None
-    ):
-
-        total_saves = (
-            hsaves + asaves
+    # Mercados solicitados
+    predictions.extend(
+        build_market_predictions(
+            home_profile,
+            away_profile
         )
-
-        for line in [
-            2.5,
-            3.5,
-            4.5,
-            5.5,
-            6.5
-        ]:
-
-            probability = poisson_over(
-                total_saves,
-                line
-            )
-
-            predictions.append({
-
-                "market":
-                "🧤 Paradas",
-
-                "selection":
-                f"Más de {line}",
-
-                "probability":
-                probability,
-
-                "source":
-                "Estadística real del partido",
-
-            })
+    )
 
     return predictions
 
@@ -1352,7 +1841,9 @@ def find_market_odds(
 # ============================================================
 
 def create_predictions_for_fixture(
-    fixture
+    fixture,
+    league_id,
+    historical_seasons
 ):
 
     fixture_id = fixture[
@@ -1375,7 +1866,9 @@ def create_predictions_for_fixture(
 
     predictions = (
         build_match_predictions(
-            fixture
+            fixture,
+            league_id,
+            historical_seasons
         )
     )
 
@@ -2002,9 +2495,12 @@ def main():
             )
         )
 
+        current_year = date.today().year
+        season_options = list(range(current_year, current_year - 5, -1))
+
         season = st.selectbox(
             "Temporada disponible",
-            [2024, 2023, 2022],
+            season_options,
             index=0
         )
 
@@ -2047,6 +2543,15 @@ def main():
             "football_data"
         ]
     )
+
+    # Solo se permiten datos de los 2 años anteriores.
+    # Se solicitan las temporadas necesarias para cubrir esa ventana.
+    current_season = season
+    historical_seasons = [
+        current_season,
+        current_season - 1,
+        current_season - 2
+    ]
 
     # --------------------------------------------------------
     # CARGA JORNADAS
@@ -2181,7 +2686,9 @@ def main():
 
                     rows = (
                         create_predictions_for_fixture(
-                            fixture
+                            fixture,
+                            league_id,
+                            historical_seasons
                         )
                     )
 
