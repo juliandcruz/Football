@@ -854,23 +854,19 @@ def get_team_historical_fixtures(
     reference_date: date
 ):
     """
-    Obtiene partidos históricos del equipo y limita los datos a
-    los 2 años anteriores a reference_date.
+    Obtiene partidos históricos FINISHED del equipo en una
+    temporada dada de la liga indicada.
 
-    El filtro de fechas se hace también localmente para garantizar
-    que nunca entren partidos anteriores a la ventana permitida.
+    NO envía from/to para evitar errores de la API cuando
+    el rango de fechas no coincide con la temporada.
+    El filtro temporal se aplica localmente después.
     """
-    start_date, end_date = historical_date_window(reference_date)
-
     data, error = api_football_get(
         "/fixtures",
         {
             "team": team_id,
             "league": league_id,
             "season": season,
-            "from": start_date.isoformat(),
-            "to": end_date.isoformat(),
-            "status": "FT"
         }
     )
 
@@ -879,9 +875,15 @@ def get_team_historical_fixtures(
 
     fixtures = data.get("response", [])
 
+    # Filtrado local: solo FT y dentro de la ventana de 2 años
+    start_date, end_date = historical_date_window(reference_date)
     filtered = []
 
     for fixture in fixtures:
+        status = fixture.get("fixture", {}).get("status", {}).get("short", "")
+        if status != "FT":
+            continue
+
         fixture_date_raw = fixture.get("fixture", {}).get("date")
         fixture_date = parse_api_date(fixture_date_raw)
 
@@ -3131,12 +3133,48 @@ def main():
             else:
 
                 prediction_rows = []
+                debug_info = []
 
                 with st.spinner(
                     "Calculando perfiles y predicciones..."
                 ):
 
                     for fixture in fixtures_to_analyze:
+                        home_name = fixture["teams"]["home"]["name"]
+                        away_name = fixture["teams"]["away"]["name"]
+
+                        fixture_date_raw = fixture.get("fixture", {}).get("date")
+                        fixture_dt = parse_api_date(fixture_date_raw)
+                        ref_date = fixture_dt.date() if fixture_dt else date.today()
+
+                        # Construir perfiles
+                        home_id = fixture["teams"]["home"]["id"]
+                        away_id = fixture["teams"]["away"]["id"]
+
+                        home_profile = build_complete_pre_match_team_profile(
+                            home_id, league_id,
+                            historical_seasons, ref_date,
+                            lookback_matches,
+                        )
+                        away_profile = build_complete_pre_match_team_profile(
+                            away_id, league_id,
+                            historical_seasons, ref_date,
+                            lookback_matches,
+                        )
+
+                        hm = home_profile.get("matches", 0)
+                        am = away_profile.get("matches", 0)
+                        hgf = home_profile.get("goals_for_avg")
+                        agf = away_profile.get("goals_for_avg")
+
+                        debug_info.append(
+                            f"{home_name}: {hm} partidos, "
+                            f"goles avg={hgf}"
+                        )
+                        debug_info.append(
+                            f"{away_name}: {am} partidos, "
+                            f"goles avg={agf}"
+                        )
 
                         rows = create_predictions_for_fixture(
                             fixture,
@@ -3147,11 +3185,35 @@ def main():
 
                         prediction_rows.extend(rows)
 
+                # Debug: mostrar info de perfiles
+                used_calls = st.session_state.get(
+                    "api_call_count", {}
+                ).get("API-Football", 0)
+                with st.expander(
+                    "\U0001f527 Diagnóstico", expanded=False
+                ):
+                    st.text(
+                        f"Temporadas consultadas: "
+                        f"{historical_seasons}"
+                    )
+                    st.text(
+                        f"Peticiones API usadas: {used_calls}"
+                    )
+                    for line in debug_info:
+                        st.text(line)
+                    st.text(
+                        f"Total predicciones generadas: "
+                        f"{len(prediction_rows)}"
+                    )
+
                 if not prediction_rows:
 
-                    st.info(
-                        "No hay estadísticas históricas "
-                        "suficientes para estos equipos."
+                    st.warning(
+                        "No se pudieron generar predicciones. "
+                        "Revisa el diagnóstico arriba para ver "
+                        "si los perfiles tienen datos. "
+                        "Posibles causas: sin histórico suficiente, "
+                        "sin cuotas disponibles, o límite de API agotado."
                     )
 
                 else:
