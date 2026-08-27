@@ -227,6 +227,24 @@ def get_secret(name: str) -> Optional[str]:
 
 
 # ============================================================
+# RENDER HTML SIN QUE MARKDOWN LO CONFUNDA CON UN BLOQUE DE CÓDIGO
+# ============================================================
+#
+# Streamlit renderiza markdown con CommonMark: cualquier línea que
+# empieza con 4 o más espacios de sangría se interpreta como un
+# bloque de código preformateado, no como HTML. Como este archivo
+# está escrito con mucha indentación (por estilo), las tarjetas de
+# partidos/pronósticos se mostraban como texto plano en vez de
+# renderizarse. Esta función quita la sangría de cada línea antes
+# de pasarla a st.markdown, sin tocar el HTML en sí.
+
+def render_html(content: str):
+    lines = content.split("\n")
+    dedented = "\n".join(line.lstrip() for line in lines)
+    st.markdown(dedented, unsafe_allow_html=True)
+
+
+# ============================================================
 # CONTADOR DE PETICIONES API (clave en plan gratuito)
 # ============================================================
 #
@@ -2544,7 +2562,7 @@ def render_match(
             f'margin-right:6px;">'
         )
 
-    st.markdown(
+    render_html(
         f"""
         <div class="match-card">
 
@@ -2581,8 +2599,7 @@ def render_match(
             </div>
 
         </div>
-        """,
-        unsafe_allow_html=True
+        """
     )
 
 
@@ -2684,7 +2701,7 @@ def render_prediction(
             f'</div>'
         )
 
-    st.markdown(
+    render_html(
         f"""
         <div class="market-card">
 
@@ -2768,8 +2785,7 @@ def render_prediction(
             </div>
 
         </div>
-        """,
-        unsafe_allow_html=True
+        """
     )
 
 
@@ -3299,7 +3315,7 @@ def main():
 
         else:
 
-            st.markdown(
+            render_html(
                 f"""
                 <div class="round-card">
                     <b>{round_to_show}</b>
@@ -3308,8 +3324,7 @@ def main():
                         partidos encontrados
                     </div>
                 </div>
-                """,
-                unsafe_allow_html=True
+                """
             )
 
             for _, row in (
