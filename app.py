@@ -441,19 +441,37 @@ def get_rounds(
 
 
 @st.cache_data(ttl=300)
+def _season_for_date(target_date: date) -> int:
+    """
+    Devuelve la temporada futbolística correspondiente a una fecha.
+    Temporadas europeas: ago-dic = año actual, ene-jul = año anterior.
+    Limitado al rango permitido por el plan gratuito (2022-2024).
+    """
+    if target_date.month >= 8:
+        season = target_date.year
+    else:
+        season = target_date.year - 1
+    return max(2022, min(season, 2024))
+
+
+@st.cache_data(ttl=900)
 def get_today_fixtures(
     league_id: int,
-    target_date: date
+    target_date: date,
+    season: int = None,
 ):
     """
     Obtiene los partidos de una fecha concreta para una liga.
-    No usa el parámetro 'season', solo 'date' + 'league',
-    lo que debería funcionar en el plan gratuito.
+    Incluye 'season' porque API-Football lo exige siempre.
     """
+    if season is None:
+        season = _season_for_date(target_date)
+
     data, error = api_football_get(
         "/fixtures",
         {
             "league": league_id,
+            "season": season,
             "date": target_date.isoformat(),
         }
     )
