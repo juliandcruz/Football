@@ -11,7 +11,7 @@ from collections import defaultdict
 # ============================================================
 
 st.set_page_config(
-    page_title="ValueBet Pro V7.2",
+    page_title="ValueBet Pro V7.3",
     page_icon="⚽",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -19,7 +19,7 @@ st.set_page_config(
 
 
 # ============================================================
-# CSS
+# ESTILOS
 # ============================================================
 
 st.markdown("""
@@ -110,34 +110,12 @@ st.markdown("""
     margin-bottom: 7px;
 }
 
-.badge {
-    display: inline-block;
-    border-radius: 7px;
-    padding: 3px 7px;
-    font-size: .68rem;
-    font-weight: 750;
-}
-
-.badge-green {
-    background: rgba(46,204,113,.14);
-    color: #2ecc71;
-}
-
-.badge-gray {
-    background: rgba(128,128,128,.13);
-}
-
 .no-data {
     padding: 11px;
     border-radius: 10px;
     background: rgba(128,128,128,.06);
     font-size: .8rem;
     opacity: .7;
-}
-
-.small {
-    font-size: .72rem;
-    opacity: .55;
 }
 
 .metric {
@@ -157,6 +135,24 @@ st.markdown("""
     font-weight: 800;
 }
 
+.status-ok {
+    color: #2ecc71;
+    font-weight: 700;
+}
+
+.status-warning {
+    color: #f39c12;
+    font-weight: 700;
+}
+
+.api-box {
+    border: 1px solid rgba(128,128,128,.15);
+    border-radius: 12px;
+    padding: 12px;
+    margin-bottom: 10px;
+    background: rgba(128,128,128,.035);
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -166,26 +162,32 @@ st.markdown("""
 # ============================================================
 
 COMPETITIONS = {
+
     "🇪🇸 La Liga": {
         "api_id": 140,
         "football_data": "PD",
     },
+
     "🇬🇧 Premier League": {
         "api_id": 39,
         "football_data": "PL",
     },
+
     "🇮🇹 Serie A": {
         "api_id": 135,
         "football_data": "SA",
     },
+
     "🇩🇪 Bundesliga": {
         "api_id": 78,
         "football_data": "BL1",
     },
+
     "🇫🇷 Ligue 1": {
         "api_id": 61,
         "football_data": "FL1",
     },
+
     "🇪🇺 Champions League": {
         "api_id": 2,
         "football_data": "CL",
@@ -230,13 +232,15 @@ def api_football(
     )
 
     if not api_key:
+
         return None, (
             "Falta API_FOOTBALL_KEY "
             "en Streamlit Secrets."
-        )
+        ), {}
 
     headers = {
-        "x-apisports-key": api_key
+        "x-apisports-key": api_key,
+        "Accept": "application/json",
     }
 
     try:
@@ -251,31 +255,48 @@ def api_football(
         try:
             data = response.json()
         except Exception:
+
             return None, (
                 f"Respuesta no válida "
                 f"HTTP {response.status_code}"
-            )
-
-        if response.status_code != 200:
-            return None, str(
-                data.get(
-                    "errors",
-                    f"HTTP {response.status_code}"
-                )
-            )
+            ), dict(response.headers)
 
         errors = data.get("errors")
 
-        if errors:
-            return None, str(errors)
+        if response.status_code != 200:
 
-        return data, None
+            return None, str(
+                errors or
+                f"HTTP {response.status_code}"
+            ), dict(response.headers)
+
+        if errors:
+
+            return None, str(
+                errors
+            ), dict(response.headers)
+
+        return (
+            data,
+            None,
+            dict(response.headers)
+        )
 
     except requests.exceptions.Timeout:
-        return None, "Timeout de API-Football."
+
+        return (
+            None,
+            "Timeout de API-Football.",
+            {}
+        )
 
     except Exception as e:
-        return None, str(e)
+
+        return (
+            None,
+            str(e),
+            {}
+        )
 
 
 # ============================================================
@@ -297,6 +318,7 @@ def football_data(
     )
 
     if not api_key:
+
         return None, (
             "Falta FOOTBALL_DATA_API_KEY "
             "en Streamlit Secrets."
@@ -318,6 +340,7 @@ def football_data(
         data = response.json()
 
         if response.status_code != 200:
+
             return None, str(
                 data.get(
                     "message",
@@ -328,11 +351,228 @@ def football_data(
         return data, None
 
     except Exception as e:
+
         return None, str(e)
 
 
 # ============================================================
-# FECHAS
+# DETECTAR TEMPORADA AUTOMÁTICAMENTE
+# ============================================================
+
+@st.cache_data(ttl=21600)
+def detect_current_season(
+    league_id
+):
+
+    """
+    Busca las temporadas disponibles
+    para la competición y selecciona
+    automáticamente la temporada actual
+    o la más cercana a la fecha actual.
+
+    NO fija season=2026 manualmente.
+    """
+
+    data, error, headers = api_football(
+        "/leagues",
+        {
+            "id": league_id
+        }
+    )
+
+    if error:
+
+        return None, error, headers
+
+    responses = data.get(
+        "response",
+        []
+    )
+
+    if not responses:
+
+        return (
+            None,
+            "API-Football no devolvió "
+            "información de la competición.",
+            headers
+        )
+
+    league_data = responses[0]
+
+    seasons = league_data.get(
+        "seasons",
+        []
+    )
+
+    if not seasons:
+
+        return (
+            None,
+            "La API no devolvió temporadas "
+            "para esta competición.",
+            headers
+        )
+
+    current_year = date.today().year
+    current_month = date.today().month
+
+    candidates = []
+
+    for item in seasons:
+
+        year = item.get(
+            "year"
+        )
+
+        start = item.get(
+            "start"
+        )
+
+        end = item.get(
+            "end"
+        )
+
+        if year is None:
+            continue
+
+        try:
+            year_int = int(year)
+        except Exception:
+            continue
+
+        candidates.append({
+            "year": year_int,
+            "start": start,
+            "end": end,
+        })
+
+    if not candidates:
+
+        return (
+            None,
+            "No se encontraron temporadas "
+            "válidas.",
+            headers
+        )
+
+    # --------------------------------------------------------
+    # 1. Buscar una temporada cuyo rango
+    #    incluya hoy.
+    # --------------------------------------------------------
+
+    today = date.today()
+
+    active = []
+
+    for item in candidates:
+
+        try:
+
+            start_date = datetime.fromisoformat(
+                item["start"]
+            ).date()
+
+            end_date = datetime.fromisoformat(
+                item["end"]
+            ).date()
+
+            if start_date <= today <= end_date:
+
+                active.append(
+                    item
+                )
+
+        except Exception:
+            continue
+
+    if active:
+
+        selected = max(
+            active,
+            key=lambda x: x["year"]
+        )
+
+        return (
+            selected["year"],
+            None,
+            headers
+        )
+
+    # --------------------------------------------------------
+    # 2. Si no encuentra una temporada
+    #    activa, usar la más cercana.
+    # --------------------------------------------------------
+
+    candidates.sort(
+        key=lambda x:
+            abs(
+                x["year"]
+                - current_year
+            )
+    )
+
+    selected = candidates[0]
+
+    return (
+        selected["year"],
+        None,
+        headers
+    )
+
+
+# ============================================================
+# FIXTURES
+# ============================================================
+
+@st.cache_data(ttl=600)
+def get_fixtures_by_dates(
+    league_id,
+    season,
+    start_date,
+    end_date
+):
+
+    params = {
+
+        "league":
+            league_id,
+
+        "season":
+            season,
+
+        "from":
+            start_date,
+
+        "to":
+            end_date,
+    }
+
+    data, error, headers = api_football(
+        "/fixtures",
+        params
+    )
+
+    if error:
+
+        return (
+            [],
+            error,
+            headers
+        )
+
+    return (
+        data.get(
+            "response",
+            []
+        ),
+        None,
+        headers
+    )
+
+
+# ============================================================
+# NORMALIZAR FIXTURE
 # ============================================================
 
 def parse_date(value):
@@ -343,10 +583,14 @@ def parse_date(value):
     try:
 
         return datetime.fromisoformat(
-            value.replace("Z", "+00:00")
+            value.replace(
+                "Z",
+                "+00:00"
+            )
         )
 
     except Exception:
+
         return None
 
 
@@ -373,48 +617,6 @@ def format_time(value):
         "%H:%M"
     )
 
-
-# ============================================================
-# FIXTURES
-#
-# IMPORTANTE:
-# NO next
-# NO rounds
-# NO season
-#
-# Utilizamos from / to.
-# ============================================================
-
-@st.cache_data(ttl=600)
-def get_fixtures_by_dates(
-    league_id,
-    start_date,
-    end_date
-):
-
-    params = {
-        "league": league_id,
-        "from": start_date,
-        "to": end_date,
-    }
-
-    data, error = api_football(
-        "/fixtures",
-        params
-    )
-
-    if error:
-        return [], error
-
-    return data.get(
-        "response",
-        []
-    ), None
-
-
-# ============================================================
-# NORMALIZAR FIXTURE
-# ============================================================
 
 def normalize_fixture(
     fixture
@@ -492,34 +694,51 @@ def normalize_fixture(
             away.get("id"),
 
         "home_logo":
-            home.get("logo", ""),
+            home.get(
+                "logo",
+                ""
+            ),
 
         "away_logo":
-            away.get("logo", ""),
+            away.get(
+                "logo",
+                ""
+            ),
 
         "round":
-            league.get("round"),
+            league.get(
+                "round"
+            ),
 
         "league":
-            league.get("name"),
+            league.get(
+                "name"
+            ),
 
         "season":
-            league.get("season"),
+            league.get(
+                "season"
+            ),
 
         "status":
-            status.get("short"),
+            status.get(
+                "short"
+            ),
 
         "venue":
-            venue.get("name"),
+            venue.get(
+                "name"
+            ),
 
         "city":
-            venue.get("city"),
-
+            venue.get(
+                "city"
+            ),
     }
 
 
 # ============================================================
-# ORDENAR JORNADAS
+# ORDEN DE JORNADAS
 # ============================================================
 
 def round_sort_key(
@@ -527,7 +746,11 @@ def round_sort_key(
 ):
 
     if not round_name:
-        return 9999
+
+        return (
+            9999,
+            ""
+        )
 
     text = str(
         round_name
@@ -539,11 +762,18 @@ def round_sort_key(
     )
 
     if match:
-        return int(
-            match.group(1)
+
+        return (
+            int(
+                match.group(1)
+            ),
+            text
         )
 
-    return 9999
+    return (
+        9999,
+        text
+    )
 
 
 def group_rounds(
@@ -563,6 +793,7 @@ def group_rounds(
         )
 
         if not round_name:
+
             round_name = (
                 "Jornada no indicada"
             )
@@ -583,7 +814,7 @@ def group_rounds(
 
 
 # ============================================================
-# FOOTBALL-DATA — CALENDARIO
+# FOOTBALL-DATA — PARTIDOS
 # ============================================================
 
 @st.cache_data(ttl=900)
@@ -600,7 +831,11 @@ def get_fd_matches(
     )
 
     if error:
-        return pd.DataFrame(), error
+
+        return (
+            pd.DataFrame(),
+            error
+        )
 
     rows = []
 
@@ -612,22 +847,30 @@ def get_fd_matches(
         rows.append({
 
             "id":
-                match.get("id"),
+                match.get(
+                    "id"
+                ),
 
             "date":
-                match.get("utcDate"),
+                match.get(
+                    "utcDate"
+                ),
 
             "home":
                 match.get(
                     "homeTeam",
                     {}
-                ).get("name"),
+                ).get(
+                    "name"
+                ),
 
             "away":
                 match.get(
                     "awayTeam",
                     {}
-                ).get("name"),
+                ).get(
+                    "name"
+                ),
 
             "matchday":
                 match.get(
@@ -638,12 +881,12 @@ def get_fd_matches(
                 match.get(
                     "status"
                 ),
-
         })
 
-    return pd.DataFrame(
-        rows
-    ), None
+    return (
+        pd.DataFrame(rows),
+        None
+    )
 
 
 # ============================================================
@@ -661,7 +904,11 @@ def get_fd_standings(
     )
 
     if error:
-        return pd.DataFrame(), error
+
+        return (
+            pd.DataFrame(),
+            error
+        )
 
     rows = []
 
@@ -673,6 +920,7 @@ def get_fd_standings(
         if standing.get(
             "type"
         ) != "TOTAL":
+
             continue
 
         for row in standing.get(
@@ -688,41 +936,59 @@ def get_fd_standings(
             rows.append({
 
                 "Pos":
-                    row.get("position"),
+                    row.get(
+                        "position"
+                    ),
 
                 "Equipo":
-                    team.get("name"),
+                    team.get(
+                        "name"
+                    ),
 
                 "PJ":
-                    row.get("playedGames"),
+                    row.get(
+                        "playedGames"
+                    ),
 
                 "G":
-                    row.get("won"),
+                    row.get(
+                        "won"
+                    ),
 
                 "E":
-                    row.get("draw"),
+                    row.get(
+                        "draw"
+                    ),
 
                 "P":
-                    row.get("lost"),
+                    row.get(
+                        "lost"
+                    ),
 
                 "GF":
-                    row.get("goalsFor"),
+                    row.get(
+                        "goalsFor"
+                    ),
 
                 "GC":
-                    row.get("goalsAgainst"),
+                    row.get(
+                        "goalsAgainst"
+                    ),
 
                 "Pts":
-                    row.get("points"),
-
+                    row.get(
+                        "points"
+                    ),
             })
 
-    return pd.DataFrame(
-        rows
-    ), None
+    return (
+        pd.DataFrame(rows),
+        None
+    )
 
 
 # ============================================================
-# PREDICCIONES API-FOOTBALL
+# PREDICCIONES
 # ============================================================
 
 @st.cache_data(ttl=900)
@@ -730,15 +996,21 @@ def get_prediction(
     fixture_id
 ):
 
-    data, error = api_football(
+    data, error, headers = api_football(
         "/predictions",
         {
-            "fixture": fixture_id
+            "fixture":
+                fixture_id
         }
     )
 
     if error:
-        return None, error
+
+        return (
+            None,
+            error,
+            headers
+        )
 
     response = data.get(
         "response",
@@ -746,13 +1018,22 @@ def get_prediction(
     )
 
     if not response:
-        return None, None
 
-    return response[0], None
+        return (
+            None,
+            None,
+            headers
+        )
+
+    return (
+        response[0],
+        None,
+        headers
+    )
 
 
 # ============================================================
-# CUOTAS API-FOOTBALL
+# CUOTAS
 # ============================================================
 
 @st.cache_data(ttl=600)
@@ -760,20 +1041,30 @@ def get_odds(
     fixture_id
 ):
 
-    data, error = api_football(
+    data, error, headers = api_football(
         "/odds",
         {
-            "fixture": fixture_id
+            "fixture":
+                fixture_id
         }
     )
 
     if error:
-        return [], error
 
-    return data.get(
-        "response",
-        []
-    ), None
+        return (
+            [],
+            error,
+            headers
+        )
+
+    return (
+        data.get(
+            "response",
+            []
+        ),
+        None,
+        headers
+    )
 
 
 # ============================================================
@@ -785,6 +1076,7 @@ def prediction_rows(
 ):
 
     if not prediction:
+
         return []
 
     p = prediction.get(
@@ -848,7 +1140,9 @@ def prediction_rows(
         {}
     )
 
-    if goals.get("home"):
+    if goals.get(
+        "home"
+    ):
 
         rows.append(
             (
@@ -860,7 +1154,9 @@ def prediction_rows(
             )
         )
 
-    if goals.get("away"):
+    if goals.get(
+        "away"
+    ):
 
         rows.append(
             (
@@ -897,7 +1193,9 @@ def prediction_rows(
         rows.append(
             (
                 "🧠 Análisis",
-                str(advice),
+                str(
+                    advice
+                ),
                 None
             )
         )
@@ -906,7 +1204,7 @@ def prediction_rows(
 
 
 # ============================================================
-# EXTRAER CUOTAS
+# EXTRAER CUOTAS REALES
 # ============================================================
 
 def extract_odds(
@@ -953,9 +1251,12 @@ def extract_odds(
                 )
 
                 if not any(
-                    word in market.lower()
-                    for word in relevant_words
+                    word in
+                    market.lower()
+                    for word in
+                    relevant_words
                 ):
+
                     continue
 
                 for value in bet.get(
@@ -971,10 +1272,13 @@ def extract_odds(
                         continue
 
                     try:
+
                         odd_float = float(
                             odd
                         )
+
                     except Exception:
+
                         continue
 
                     rows.append({
@@ -992,7 +1296,6 @@ def extract_odds(
 
                         "odds":
                             odd_float,
-
                     })
 
     return rows
@@ -1010,7 +1313,7 @@ def render_odds(
         "#### 💰 Cuotas reales"
     )
 
-    odds, error = get_odds(
+    odds, error, headers = get_odds(
         fixture_id
     )
 
@@ -1042,9 +1345,6 @@ def render_odds(
     df = pd.DataFrame(
         rows
     )
-
-    # Evitar una pantalla gigantesca
-    # en móvil.
 
     markets = (
         df["market"]
@@ -1082,7 +1382,7 @@ def render_odds(
 
 
 # ============================================================
-# PANEL DE PARTIDO
+# ANÁLISIS DEL PARTIDO
 # ============================================================
 
 def render_match_analysis(
@@ -1124,7 +1424,7 @@ def render_match_analysis(
         "#### 🔮 Pronóstico"
     )
 
-    prediction, error = (
+    prediction, error, headers = (
         get_prediction(
             fixture_id
         )
@@ -1154,14 +1454,22 @@ def render_match_analysis(
 
         else:
 
-            for market, selection, comment in rows:
+            for (
+                market,
+                selection,
+                comment
+            ) in rows:
 
-                extra = (
-                    f"<br><span class='small'>"
-                    f"{comment}</span>"
-                    if comment
-                    else ""
-                )
+                extra = ""
+
+                if comment:
+
+                    extra = (
+                        "<br><span "
+                        "class='small'>"
+                        f"{comment}"
+                        "</span>"
+                    )
 
                 st.markdown(
                     f"""
@@ -1188,19 +1496,21 @@ def render_match_analysis(
 
 
 # ============================================================
-# TARJETAS SUPERIORES
+# RESUMEN
 # ============================================================
 
 def render_summary(
     fixtures,
-    grouped
+    grouped,
+    season
 ):
 
-    col1, col2, col3, col4 = st.columns(
-        4
+    col1, col2, col3, col4 = (
+        st.columns(4)
     )
 
     with col1:
+
         st.markdown(
             f"""
             <div class="metric">
@@ -1216,6 +1526,7 @@ def render_summary(
         )
 
     with col2:
+
         st.markdown(
             f"""
             <div class="metric">
@@ -1231,6 +1542,7 @@ def render_summary(
         )
 
     with col3:
+
         dates = sorted(
             set(
                 f["date"]
@@ -1255,13 +1567,13 @@ def render_summary(
     with col4:
 
         st.markdown(
-            """
+            f"""
             <div class="metric">
             <div class="metric-label">
-            FUENTE
+            TEMPORADA
             </div>
             <div class="metric-value">
-            API
+            {season}
             </div>
             </div>
             """,
@@ -1277,7 +1589,7 @@ def main():
 
     st.markdown(
         '<div class="app-title">'
-        '⚽ ValueBet Pro V7.2'
+        '⚽ ValueBet Pro V7.3'
         '</div>',
         unsafe_allow_html=True
     )
@@ -1313,16 +1625,19 @@ def main():
         days_ahead = st.slider(
             "Días de calendario",
             min_value=3,
-            max_value=31,
+            max_value=21,
             value=14,
             step=1
         )
 
         st.caption(
-            "La app utiliza consultas "
-            "por fechas porque tu plan "
-            "Free no permite el parámetro "
-            "`next`."
+            "La app no utiliza `next` ni "
+            "`/fixtures/rounds`."
+        )
+
+        st.caption(
+            "La temporada se detecta "
+            "automáticamente."
         )
 
         st.divider()
@@ -1348,6 +1663,44 @@ def main():
     ]
 
     # ========================================================
+    # DETECCIÓN DE TEMPORADA
+    # ========================================================
+
+    with st.spinner(
+        "Detectando temporada..."
+    ):
+
+        (
+            season,
+            season_error,
+            season_headers
+        ) = detect_current_season(
+            league_id
+        )
+
+    if season_error:
+
+        st.error(
+            "No se pudo detectar "
+            "automáticamente la temporada."
+        )
+
+        st.code(
+            season_error
+        )
+
+        st.info(
+            "La aplicación utiliza "
+            "/leagues para conocer las "
+            "temporadas disponibles para "
+            "tu cuenta y evitar enviar "
+            "una temporada que tu plan "
+            "Free no tenga disponible."
+        )
+
+        return
+
+    # ========================================================
     # FECHAS
     # ========================================================
 
@@ -1360,20 +1713,32 @@ def main():
         )
     )
 
-    start_string = today.isoformat()
-    end_string = end_date.isoformat()
+    start_string = (
+        today.isoformat()
+    )
+
+    end_string = (
+        end_date.isoformat()
+    )
 
     # ========================================================
-    # API-FOOTBALL
+    # FIXTURES
     # ========================================================
 
-    fixtures_raw, api_error = (
-        get_fixtures_by_dates(
+    with st.spinner(
+        "Cargando próximos partidos..."
+    ):
+
+        (
+            fixtures_raw,
+            api_error,
+            fixture_headers
+        ) = get_fixtures_by_dates(
             league_id,
+            season,
             start_string,
             end_string
         )
-    )
 
     # ========================================================
     # FOOTBALL-DATA
@@ -1386,7 +1751,7 @@ def main():
     )
 
     # ========================================================
-    # ERROR API
+    # ERROR
     # ========================================================
 
     if api_error:
@@ -1401,10 +1766,10 @@ def main():
         )
 
         st.info(
-            "La V7.2 usa /fixtures con "
-            "from/to. No utiliza `next`, "
-            "ni /fixtures/rounds, ni "
-            "season=2026."
+            f"La aplicación detectó "
+            f"automáticamente la temporada "
+            f"**{season}** y realizó la consulta "
+            f"con `league + season + from + to`."
         )
 
         return
@@ -1414,11 +1779,12 @@ def main():
     # ========================================================
 
     fixtures = [
-        normalize_fixture(f)
+        normalize_fixture(
+            f
+        )
         for f in fixtures_raw
     ]
 
-    # Solo futuros o partidos del rango
     fixtures = sorted(
         fixtures,
         key=lambda x:
@@ -1435,7 +1801,8 @@ def main():
 
     render_summary(
         fixtures,
-        grouped
+        grouped,
+        season
     )
 
     st.write("")
@@ -1444,15 +1811,18 @@ def main():
     # TABS
     # ========================================================
 
-    tab_predictions, tab_matches, tab_table, tab_status = (
-        st.tabs(
-            [
-                "🔮 Pronósticos",
-                "📅 Partidos",
-                "🏆 Clasificación",
-                "🔧 Estado",
-            ]
-        )
+    (
+        tab_predictions,
+        tab_matches,
+        tab_table,
+        tab_status
+    ) = st.tabs(
+        [
+            "🔮 Pronósticos",
+            "📅 Partidos",
+            "🏆 Clasificación",
+            "🔧 Estado",
+        ]
     )
 
     # ========================================================
@@ -1469,19 +1839,18 @@ def main():
         )
 
         st.caption(
-            "Selecciona un encuentro para "
-            "consultar el pronóstico de "
-            "API-Football y sus cuotas "
-            "reales disponibles."
+            "Los pronósticos y las cuotas "
+            "se consultan directamente de "
+            "API-Football cuando seleccionas "
+            "un partido."
         )
 
         if not fixtures:
 
             st.info(
                 f"No hay partidos entre "
-                f"{format_date(start_string)} "
-                f"y "
-                f"{format_date(end_string)}."
+                f"{start_string} y "
+                f"{end_string}."
             )
 
         else:
@@ -1494,9 +1863,7 @@ def main():
                     f"### {round_name}"
                 )
 
-                for idx, match in enumerate(
-                    matches
-                ):
+                for match in matches:
 
                     col1, col2, col3 = (
                         st.columns(
@@ -1529,7 +1896,7 @@ def main():
                         show = st.button(
                             "Ver",
                             key=(
-                                f"view_"
+                                "view_"
                                 f"{match['fixture_id']}"
                             ),
                             use_container_width=True
@@ -1575,15 +1942,16 @@ def main():
         )
 
         st.caption(
-            "Fecha, hora, equipos y jornada "
-            "proceden de los datos reales "
-            "devueltos por API-Football."
+            f"Temporada detectada: "
+            f"**{season}** · "
+            f"{start_string} → {end_string}"
         )
 
         if not fixtures:
 
             st.info(
-                "No hay partidos disponibles."
+                "No hay partidos disponibles "
+                "en el periodo seleccionado."
             )
 
         else:
@@ -1709,9 +2077,8 @@ def main():
         if standings_error:
 
             st.warning(
-                "No se pudo obtener la "
-                "clasificación de "
-                "football-data.org."
+                "No se pudo obtener "
+                "la clasificación."
             )
 
             st.code(
@@ -1750,41 +2117,124 @@ def main():
             unsafe_allow_html=True
         )
 
-        st.success(
-            "API-Football conectada"
-            if not api_error
-            else "API-Football con error"
+        # ----------------------------------------------------
+        # API FOOTBALL
+        # ----------------------------------------------------
+
+        st.markdown(
+            '<div class="api-box">',
+            unsafe_allow_html=True
+        )
+
+        st.markdown(
+            "### ⚽ API-Football"
         )
 
         st.write(
-            f"Partidos recibidos: "
-            f"**{len(fixtures)}**"
+            "Estado: "
+            "**Conectada**"
         )
 
         st.write(
-            f"Rango consultado: "
+            f"Competición: "
+            f"**{competition_name}**"
+        )
+
+        st.write(
+            f"League ID: "
+            f"**{league_id}**"
+        )
+
+        st.write(
+            f"Temporada detectada: "
+            f"**{season}**"
+        )
+
+        st.write(
+            f"Periodo: "
             f"**{start_string} → {end_string}**"
         )
 
         st.write(
-            "Método: **fixtures + from/to**"
+            "Endpoint: "
+            "**/fixtures**"
         )
 
         st.write(
-            "Parámetro `next`: **NO utilizado**"
+            "Método: "
+            "**league + season + from + to**"
         )
 
         st.write(
-            "`/fixtures/rounds`: **NO utilizado**"
+            "`next`: ❌ No utilizado"
         )
 
-        st.divider()
+        st.write(
+            "`/fixtures/rounds`: "
+            "❌ No utilizado"
+        )
+
+        st.write(
+            f"Partidos: "
+            f"**{len(fixtures)}**"
+        )
+
+        # Headers de consumo
+
+        remaining = (
+            fixture_headers.get(
+                "x-ratelimit-requests-remaining"
+            )
+            or fixture_headers.get(
+                "X-RateLimit-Remaining"
+            )
+        )
+
+        daily_limit = (
+            fixture_headers.get(
+                "x-ratelimit-requests-limit"
+            )
+        )
+
+        if remaining:
+
+            st.write(
+                f"Requests restantes: "
+                f"**{remaining}**"
+            )
+
+        if daily_limit:
+
+            st.write(
+                f"Límite diario: "
+                f"**{daily_limit}**"
+            )
+
+        st.markdown(
+            '</div>',
+            unsafe_allow_html=True
+        )
+
+        # ----------------------------------------------------
+        # FOOTBALL DATA
+        # ----------------------------------------------------
+
+        st.markdown(
+            '<div class="api-box">',
+            unsafe_allow_html=True
+        )
+
+        st.markdown(
+            "### 🏆 football-data.org"
+        )
 
         if fd_error:
 
-            st.warning(
-                "football-data.org: "
-                "no disponible"
+            st.markdown(
+                '<span class="status-warning">'
+                '⚠️ No disponible'
+                '</span>',
+                unsafe_allow_html=True
             )
 
             st.code(
@@ -1793,8 +2243,11 @@ def main():
 
         else:
 
-            st.success(
-                "football-data.org conectado"
+            st.markdown(
+                '<span class="status-ok">'
+                '✓ Conectada'
+                '</span>',
+                unsafe_allow_html=True
             )
 
             st.write(
@@ -1802,13 +2255,22 @@ def main():
                 f"**{len(fd_matches)}**"
             )
 
-        st.divider()
+        st.markdown(
+            '</div>',
+            unsafe_allow_html=True
+        )
 
-        st.caption(
-            "Las cuotas y pronósticos solo "
-            "se muestran cuando la API los "
-            "devuelve. No se generan datos "
-            "artificialmente."
+        # ----------------------------------------------------
+        # INFORMACIÓN
+        # ----------------------------------------------------
+
+        st.info(
+            "La V7.3 detecta primero la "
+            "temporada disponible para la "
+            "competición mediante API-Football. "
+            "Después consulta los partidos "
+            "usando esa temporada y un rango "
+            "de fechas."
         )
 
     # ========================================================
@@ -1818,14 +2280,14 @@ def main():
     st.divider()
 
     st.caption(
-        "ValueBet Football Pro V7.2 · "
+        "ValueBet Football Pro V7.3 · "
         "API-Football + football-data.org · "
-        "Sin cuotas inventadas"
+        "Datos reales · Sin cuotas inventadas"
     )
 
 
 # ============================================================
-# RUN
+# EJECUTAR
 # ============================================================
 
 if __name__ == "__main__":
