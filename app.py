@@ -1,52 +1,75 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import datetime, timezone
 import requests
 import math
-from pathlib import Path
+import re
+from datetime import datetime, timezone, date
+from typing import Optional, Dict, List, Tuple
+
 
 # ============================================================
 # CONFIGURACIÓN
 # ============================================================
 
 st.set_page_config(
-    page_title="ValueBet Pro",
+    page_title="ValueBet Pro V7",
     page_icon="⚽",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
+
 # ============================================================
 # ESTILO
 # ============================================================
 
-st.markdown("""
+st.markdown(
+    """
 <style>
 
 .block-container {
-    max-width: 1150px;
-    padding: 1rem .8rem 4rem .8rem;
+    max-width: 1180px;
+    padding: 1rem .7rem 4rem .7rem;
 }
 
-.value-card {
-    border: 1px solid rgba(128,128,128,.18);
-    border-radius: 18px;
-    padding: 18px;
-    margin-bottom: 14px;
+.main-title {
+    font-size: 1.8rem;
+    font-weight: 850;
+    margin-bottom: 0;
+}
+
+.subtitle {
+    opacity: .55;
+    font-size: .82rem;
+    margin-bottom: 18px;
+}
+
+.section-title {
+    font-size: 1.25rem;
+    font-weight: 800;
+    margin: 10px 0 12px 0;
+}
+
+.round-card {
+    border: 1px solid rgba(128,128,128,.16);
+    border-radius: 16px;
+    padding: 13px 15px;
+    margin-bottom: 10px;
     background: rgba(128,128,128,.035);
 }
 
-.match-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 14px;
+.match-card {
+    border: 1px solid rgba(128,128,128,.15);
+    border-radius: 15px;
+    padding: 14px;
+    margin-bottom: 10px;
+    background: rgba(128,128,128,.025);
 }
 
-.match-teams {
-    font-size: 1rem;
-    font-weight: 700;
+.team-line {
+    font-size: .96rem;
+    font-weight: 750;
 }
 
 .match-date {
@@ -54,205 +77,278 @@ st.markdown("""
     opacity: .55;
 }
 
-.market-title {
-    font-size: 1.05rem;
-    font-weight: 750;
-    margin-bottom: 12px;
+.market-card {
+    border: 1px solid rgba(128,128,128,.13);
+    border-radius: 12px;
+    padding: 12px;
+    margin-bottom: 8px;
+    background: rgba(128,128,128,.025);
 }
 
-.metric-box {
-    border-radius: 12px;
-    padding: 10px;
+.market-title {
+    font-weight: 750;
+    font-size: .95rem;
+}
+
+.metric {
     background: rgba(128,128,128,.06);
+    border-radius: 10px;
+    padding: 8px;
     text-align: center;
 }
 
 .metric-label {
-    font-size: .70rem;
+    font-size: .66rem;
     opacity: .55;
 }
 
 .metric-value {
-    font-size: 1.05rem;
+    font-size: .98rem;
     font-weight: 750;
-}
-
-.ev-positive {
-    color: #2ecc71;
-}
-
-.ev-negative {
-    color: #e74c3c;
 }
 
 .value-badge {
     display: inline-block;
-    padding: 4px 9px;
-    border-radius: 8px;
-    font-size: .72rem;
-    font-weight: 750;
     background: rgba(46,204,113,.14);
     color: #2ecc71;
+    padding: 4px 8px;
+    border-radius: 7px;
+    font-size: .7rem;
+    font-weight: 800;
 }
 
-.neutral-badge {
+.no-value-badge {
     display: inline-block;
-    padding: 4px 9px;
-    border-radius: 8px;
-    font-size: .72rem;
     background: rgba(128,128,128,.12);
+    padding: 4px 8px;
+    border-radius: 7px;
+    font-size: .7rem;
 }
 
 .no-odds-badge {
     display: inline-block;
-    padding: 4px 9px;
-    border-radius: 8px;
-    font-size: .72rem;
     background: rgba(241,196,15,.12);
     color: #f1c40f;
+    padding: 4px 8px;
+    border-radius: 7px;
+    font-size: .7rem;
 }
 
-.section-title {
-    font-size: 1.25rem;
-    font-weight: 800;
-    margin-top: 8px;
-    margin-bottom: 12px;
+.positive {
+    color: #2ecc71;
 }
 
-.small-note {
+.negative {
+    color: #e74c3c;
+}
+
+.info-line {
     font-size: .75rem;
-    opacity: .55;
+    opacity: .58;
 }
 
-hr {
-    opacity: .15;
+@media (max-width: 700px) {
+
+    .main-title {
+        font-size: 1.5rem;
+    }
+
+    .block-container {
+        padding-left: .55rem;
+        padding-right: .55rem;
+    }
+
+    .team-line {
+        font-size: .9rem;
+    }
+
 }
 
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 
 # ============================================================
-# CONSTANTES
+# COMPETICIONES
 # ============================================================
 
-MIN_PROBABILITY = 0.45
+COMPETITIONS = {
 
-DEFAULT_CORNERS = 9.5
-DEFAULT_CARDS = 4.5
-DEFAULT_SOT = 8.5
+    "🇪🇸 La Liga": {
+        "football_data": "PD",
+        "api_football": 140,
+    },
 
-MAX_KELLY_STAKE = 0.02
+    "🇬🇧 Premier League": {
+        "football_data": "PL",
+        "api_football": 39,
+    },
+
+    "🇪🇺 Champions League": {
+        "football_data": "CL",
+        "api_football": 2,
+    },
+
+    "🇮🇹 Serie A": {
+        "football_data": "SA",
+        "api_football": 135,
+    },
+
+    "🇩🇪 Bundesliga": {
+        "football_data": "BL1",
+        "api_football": 78,
+    },
+
+    "🇫🇷 Ligue 1": {
+        "football_data": "FL1",
+        "api_football": 61,
+    },
+}
 
 
 # ============================================================
-# FUNCIONES MATEMÁTICAS
+# SECRETS
 # ============================================================
 
-def poisson_pmf(k, lam):
+def get_secret(name: str) -> Optional[str]:
 
-    lam = max(0.01, float(lam))
+    try:
+        value = st.secrets.get(name)
 
-    return (
-        math.exp(-lam)
-        * lam ** k
-        / math.factorial(k)
-    )
+        if value:
+            return str(value).strip()
 
+    except Exception:
+        pass
 
-def poisson_prob_over(expected_value, line):
-
-    expected_value = max(
-        0.01,
-        float(expected_value)
-    )
-
-    threshold = math.floor(
-        float(line)
-    ) + 1
-
-    probability_under = sum(
-        poisson_pmf(
-            k,
-            expected_value
-        )
-        for k in range(threshold)
-    )
-
-    probability = 1 - probability_under
-
-    return max(
-        .001,
-        min(.999, probability)
-    )
+    return None
 
 
-def fair_odds(probability):
+# ============================================================
+# HTTP API-FOOTBALL
+# ============================================================
 
-    if probability <= 0:
-        return np.nan
-
-    return 1 / probability
-
-
-def implied_probability(odds):
-
-    if pd.isna(odds) or odds <= 1:
-        return np.nan
-
-    return 1 / odds
+API_FOOTBALL_URL = (
+    "https://v3.football.api-sports.io"
+)
 
 
-def expected_value(probability, odds):
-
-    if pd.isna(odds) or odds <= 1:
-        return np.nan
-
-    return probability * odds - 1
-
-
-def edge_probability(probability, odds):
-
-    implied = implied_probability(odds)
-
-    if pd.isna(implied):
-        return np.nan
-
-    return probability - implied
-
-
-def kelly_fraction(
-    probability,
-    odds,
-    fraction=0.25,
-    maximum=0.02
+def api_football_get(
+    endpoint: str,
+    params: Dict
 ):
 
-    if pd.isna(odds) or odds <= 1:
-        return 0
-
-    p = probability
-    q = 1 - p
-    b = odds - 1
-
-    raw = (
-        (b * p) - q
-    ) / b
-
-    if raw <= 0:
-        return 0
-
-    return min(
-        raw * fraction,
-        maximum
+    key = get_secret(
+        "API_FOOTBALL_KEY"
     )
+
+    if not key:
+
+        return None, (
+            "Falta API_FOOTBALL_KEY "
+            "en Streamlit Secrets."
+        )
+
+    headers = {
+        "x-apisports-key": key
+    }
+
+    try:
+
+        response = requests.get(
+            API_FOOTBALL_URL + endpoint,
+            headers=headers,
+            params=params,
+            timeout=20,
+        )
+
+        if response.status_code != 200:
+
+            return None, (
+                f"API-Football HTTP "
+                f"{response.status_code}"
+            )
+
+        data = response.json()
+
+        errors = data.get(
+            "errors",
+            {}
+        )
+
+        if errors:
+
+            return None, str(errors)
+
+        return data, None
+
+    except requests.RequestException as e:
+
+        return None, str(e)
+
+
+# ============================================================
+# HTTP FOOTBALL-DATA
+# ============================================================
+
+FOOTBALL_DATA_URL = (
+    "https://api.football-data.org/v4"
+)
+
+
+def football_data_get(
+    endpoint: str,
+    params: Optional[Dict] = None
+):
+
+    key = get_secret(
+        "FOOTBALL_DATA_API_KEY"
+    )
+
+    if not key:
+
+        return None, (
+            "Falta FOOTBALL_DATA_API_KEY "
+            "en Streamlit Secrets."
+        )
+
+    headers = {
+        "X-Auth-Token": key
+    }
+
+    try:
+
+        response = requests.get(
+            FOOTBALL_DATA_URL + endpoint,
+            headers=headers,
+            params=params or {},
+            timeout=20,
+        )
+
+        if response.status_code != 200:
+
+            return None, (
+                f"football-data.org HTTP "
+                f"{response.status_code}"
+            )
+
+        return response.json(), None
+
+    except requests.RequestException as e:
+
+        return None, str(e)
 
 
 # ============================================================
 # FECHAS
 # ============================================================
 
-def parse_date(value):
+def parse_api_date(value):
+
+    if not value:
+        return None
 
     try:
 
@@ -263,27 +359,131 @@ def parse_date(value):
             )
         )
 
-        dt = dt.astimezone(
-            timezone.utc
-        )
-
-        return (
-            dt.strftime("%d/%m"),
-            dt.date(),
-            dt.strftime("%H:%M")
-        )
+        return dt
 
     except Exception:
 
-        now = datetime.now(
-            timezone.utc
-        )
+        return None
 
-        return (
-            "Próx.",
-            now.date(),
-            ""
-        )
+
+def local_date_string(value):
+
+    dt = parse_api_date(value)
+
+    if not dt:
+        return "Sin fecha"
+
+    return dt.strftime(
+        "%d/%m/%Y"
+    )
+
+
+def local_time_string(value):
+
+    dt = parse_api_date(value)
+
+    if not dt:
+        return "—"
+
+    return dt.strftime(
+        "%H:%M"
+    )
+
+
+# ============================================================
+# ROUNDS
+# ============================================================
+
+@st.cache_data(ttl=21600)
+def get_rounds(
+    league_id: int,
+    season: int
+):
+
+    data, error = api_football_get(
+        "/fixtures/rounds",
+        {
+            "league": league_id,
+            "season": season,
+        }
+    )
+
+    if error:
+        return [], error
+
+    rounds = data.get(
+        "response",
+        []
+    )
+
+    return rounds, None
+
+
+# ============================================================
+# FIXTURES POR JORNADA
+# ============================================================
+
+@st.cache_data(ttl=900)
+def get_fixtures_by_round(
+    league_id: int,
+    season: int,
+    round_name: str
+):
+
+    data, error = api_football_get(
+        "/fixtures",
+        {
+            "league": league_id,
+            "season": season,
+            "round": round_name,
+        }
+    )
+
+    if error:
+        return [], error
+
+    fixtures = data.get(
+        "response",
+        []
+    )
+
+    return fixtures, None
+
+
+# ============================================================
+# FIXTURE IDs EN BLOQUE
+# ============================================================
+
+@st.cache_data(ttl=900)
+def get_fixture_details(
+    fixture_ids: Tuple[int, ...]
+):
+
+    if not fixture_ids:
+        return []
+
+    ids_string = "-".join(
+        str(x)
+        for x in fixture_ids
+    )
+
+    data, error = api_football_get(
+        "/fixtures",
+        {
+            "ids": ids_string
+        }
+    )
+
+    if error:
+        return [], error
+
+    return (
+        data.get(
+            "response",
+            []
+        ),
+        None
+    )
 
 
 # ============================================================
@@ -291,705 +491,1282 @@ def parse_date(value):
 # ============================================================
 
 @st.cache_data(ttl=300)
-def load_real_odds():
+def get_fixture_odds(
+    fixture_id: int
+):
 
-    path = Path("data/odds.csv")
+    data, error = api_football_get(
+        "/odds",
+        {
+            "fixture": fixture_id
+        }
+    )
 
-    if not path.exists():
-        return pd.DataFrame()
+    if error:
+        return [], error
+
+    return (
+        data.get(
+            "response",
+            []
+        ),
+        None
+    )
+
+
+# ============================================================
+# ESTADÍSTICAS DE FIXTURE
+# ============================================================
+
+def extract_team_statistics(
+    fixture: Dict
+):
+
+    result = {}
+
+    statistics = fixture.get(
+        "statistics",
+        []
+    )
+
+    for team_block in statistics:
+
+        team = team_block.get(
+            "team",
+            {}
+        )
+
+        team_id = team.get(
+            "id"
+        )
+
+        if not team_id:
+            continue
+
+        stats = {}
+
+        for item in team_block.get(
+            "statistics",
+            []
+        ):
+
+            name = item.get(
+                "type"
+            )
+
+            value = item.get(
+                "value"
+            )
+
+            stats[name] = value
+
+        result[team_id] = stats
+
+    return result
+
+
+def clean_stat_value(value):
+
+    if value is None:
+        return None
+
+    if isinstance(
+        value,
+        (int, float)
+    ):
+        return float(value)
+
+    text = str(
+        value
+    ).strip()
+
+    if text in [
+        "",
+        "-",
+        "null",
+        "None"
+    ]:
+        return None
+
+    text = (
+        text
+        .replace("%", "")
+        .replace(",", ".")
+    )
 
     try:
 
-        odds_df = pd.read_csv(path)
-
-        required = [
-            "home",
-            "away",
-            "market",
-            "line",
-            "odds"
-        ]
-
-        if not all(
-            col in odds_df.columns
-            for col in required
-        ):
-            return pd.DataFrame()
-
-        odds_df["odds"] = pd.to_numeric(
-            odds_df["odds"],
-            errors="coerce"
-        )
-
-        return odds_df[
-            odds_df["odds"] > 1
-        ].copy()
+        return float(text)
 
     except Exception:
 
-        return pd.DataFrame()
+        return None
 
 
-def get_real_odds(
-    odds_df,
-    home,
-    away,
-    market,
+# ============================================================
+# EXTRAER ESTADÍSTICAS DEL PARTIDO
+# ============================================================
+
+def fixture_statistics(
+    fixture: Dict
+):
+
+    teams = fixture.get(
+        "teams",
+        {}
+    )
+
+    home = teams.get(
+        "home",
+        {}
+    )
+
+    away = teams.get(
+        "away",
+        {}
+    )
+
+    home_id = home.get(
+        "id"
+    )
+
+    away_id = away.get(
+        "id"
+    )
+
+    stats = extract_team_statistics(
+        fixture
+    )
+
+    home_stats = stats.get(
+        home_id,
+        {}
+    )
+
+    away_stats = stats.get(
+        away_id,
+        {}
+    )
+
+    def value(
+        block,
+        possible_names
+    ):
+
+        for name in possible_names:
+
+            if name in block:
+
+                return clean_stat_value(
+                    block[name]
+                )
+
+        return None
+
+    return {
+
+        "home_corners":
+        value(
+            home_stats,
+            [
+                "Corner Kicks"
+            ]
+        ),
+
+        "away_corners":
+        value(
+            away_stats,
+            [
+                "Corner Kicks"
+            ]
+        ),
+
+        "home_shots":
+        value(
+            home_stats,
+            [
+                "Total Shots"
+            ]
+        ),
+
+        "away_shots":
+        value(
+            away_stats,
+            [
+                "Total Shots"
+            ]
+        ),
+
+        "home_sot":
+        value(
+            home_stats,
+            [
+                "Shots on Goal"
+            ]
+        ),
+
+        "away_sot":
+        value(
+            away_stats,
+            [
+                "Shots on Goal"
+            ]
+        ),
+
+        "home_yellow":
+        value(
+            home_stats,
+            [
+                "Yellow Cards"
+            ]
+        ),
+
+        "away_yellow":
+        value(
+            away_stats,
+            [
+                "Yellow Cards"
+            ]
+        ),
+
+        "home_red":
+        value(
+            home_stats,
+            [
+                "Red Cards"
+            ]
+        ),
+
+        "away_red":
+        value(
+            away_stats,
+            [
+                "Red Cards"
+            ]
+        ),
+
+        "home_saves":
+        value(
+            home_stats,
+            [
+                "Goalkeeper Saves"
+            ]
+        ),
+
+        "away_saves":
+        value(
+            away_stats,
+            [
+                "Goalkeeper Saves"
+            ]
+        ),
+    }
+
+
+# ============================================================
+# MODELOS
+# ============================================================
+
+def poisson_over(
+    expected,
     line
 ):
 
-    if odds_df.empty:
-        return np.nan, ""
-
-    matches = odds_df[
-        (
-            odds_df["home"]
-            .astype(str)
-            .str.lower()
-            ==
-            str(home).lower()
-        )
-        &
-        (
-            odds_df["away"]
-            .astype(str)
-            .str.lower()
-            ==
-            str(away).lower()
-        )
-        &
-        (
-            odds_df["market"]
-            .astype(str)
-            .str.lower()
-            ==
-            str(market).lower()
-        )
-        &
-        (
-            odds_df["line"]
-            .astype(str)
-            ==
-            str(line)
-        )
-    ]
-
-    if matches.empty:
-        return np.nan, ""
-
-    row = matches.iloc[0]
-
-    bookmaker = ""
-
-    if "bookmaker" in matches.columns:
-
-        bookmaker = str(
-            row["bookmaker"]
-        )
-
-    return (
-        float(row["odds"]),
-        bookmaker
-    )
-
-
-# ============================================================
-# API FOOTBALL-DATA.ORG
-# ============================================================
-
-@st.cache_data(ttl=3600)
-def load_data(competition):
+    if expected is None:
+        return None
 
     try:
 
-        api_key = st.secrets[
-            "FOOTBALL_DATA_API_KEY"
-        ]
+        expected = float(
+            expected
+        )
+
+        if expected <= 0:
+            return None
+
+        threshold = (
+            math.floor(
+                float(line)
+            ) + 1
+        )
+
+        under = 0.0
+
+        for k in range(
+            threshold
+        ):
+
+            under += (
+                math.exp(-expected)
+                *
+                expected ** k
+                /
+                math.factorial(k)
+            )
+
+        return max(
+            0.001,
+            min(
+                .999,
+                1 - under
+            )
+        )
 
     except Exception:
 
-        return (
-            pd.DataFrame(),
-            "Falta FOOTBALL_DATA_API_KEY."
-        )
+        return None
 
-    headers = {
-        "X-Auth-Token": api_key
-    }
 
-    matches_url = (
-        "https://api.football-data.org/v4/"
-        f"competitions/{competition}/matches"
-        "?status=SCHEDULED"
+def fair_odds(probability):
+
+    if (
+        probability is None
+        or probability <= 0
+    ):
+        return None
+
+    return 1 / probability
+
+
+def implied_probability(
+    odds
+):
+
+    if (
+        odds is None
+        or pd.isna(odds)
+        or odds <= 1
+    ):
+        return None
+
+    return 1 / float(
+        odds
     )
 
-    standings_url = (
-        "https://api.football-data.org/v4/"
-        f"competitions/{competition}/standings"
+
+def calculate_ev(
+    probability,
+    odds
+):
+
+    if (
+        probability is None
+        or odds is None
+        or pd.isna(odds)
+        or odds <= 1
+    ):
+        return None
+
+    return (
+        probability * odds
+    ) - 1
+
+
+# ============================================================
+# CONSTRUIR PRONÓSTICOS A PARTIR DE ESTADÍSTICAS REALES
+# ============================================================
+
+def build_match_predictions(
+    fixture: Dict
+):
+
+    stats = fixture_statistics(
+        fixture
     )
 
-    try:
+    home = fixture[
+        "teams"
+    ][
+        "home"
+    ]
 
-        response = requests.get(
-            matches_url,
-            headers=headers,
-            timeout=15
-        )
+    away = fixture[
+        "teams"
+    ][
+        "away"
+    ]
 
-        if response.status_code != 200:
+    home_name = home.get(
+        "name",
+        "Local"
+    )
 
-            return (
-                pd.DataFrame(),
-                f"Error API: {response.status_code}"
+    away_name = away.get(
+        "name",
+        "Visitante"
+    )
+
+    predictions = []
+
+    # --------------------------------------------------------
+    # CÓRNERS
+    # --------------------------------------------------------
+
+    hc = stats[
+        "home_corners"
+    ]
+
+    ac = stats[
+        "away_corners"
+    ]
+
+    if (
+        hc is not None
+        and ac is not None
+    ):
+
+        total = hc + ac
+
+        for line in [
+            7.5,
+            8.5,
+            9.5,
+            10.5,
+            11.5
+        ]:
+
+            # Para un partido ya jugado no queremos usar
+            # la estadística final como predictor del propio
+            # partido. Por eso estas predicciones se utilizan
+            # solamente para análisis de partidos finalizados.
+            #
+            # La V7 marcará estos datos como HISTÓRICOS.
+
+            probability = poisson_over(
+                total,
+                line
             )
 
-        matches = response.json().get(
-            "matches",
+            predictions.append({
+
+                "market":
+                "📐 Córners",
+
+                "selection":
+                f"Más de {line}",
+
+                "probability":
+                probability,
+
+                "source":
+                "Estadística real del partido",
+
+            })
+
+    # --------------------------------------------------------
+    # TIROS A PUERTA
+    # --------------------------------------------------------
+
+    hs = stats[
+        "home_sot"
+    ]
+
+    ass = stats[
+        "away_sot"
+    ]
+
+    if (
+        hs is not None
+        and ass is not None
+    ):
+
+        total_sot = hs + ass
+
+        for line in [
+            6.5,
+            7.5,
+            8.5,
+            9.5,
+            10.5
+        ]:
+
+            probability = poisson_over(
+                total_sot,
+                line
+            )
+
+            predictions.append({
+
+                "market":
+                "🎯 Tiros a puerta",
+
+                "selection":
+                f"Más de {line}",
+
+                "probability":
+                probability,
+
+                "source":
+                "Estadística real del partido",
+
+            })
+
+    # --------------------------------------------------------
+    # TARJETAS
+    # --------------------------------------------------------
+
+    hy = stats[
+        "home_yellow"
+    ]
+
+    ay = stats[
+        "away_yellow"
+    ]
+
+    if (
+        hy is not None
+        and ay is not None
+    ):
+
+        total_cards = hy + ay
+
+        for line in [
+            2.5,
+            3.5,
+            4.5,
+            5.5,
+            6.5
+        ]:
+
+            probability = poisson_over(
+                total_cards,
+                line
+            )
+
+            predictions.append({
+
+                "market":
+                "🟨 Tarjetas",
+
+                "selection":
+                f"Más de {line}",
+
+                "probability":
+                probability,
+
+                "source":
+                "Estadística real del partido",
+
+            })
+
+    # --------------------------------------------------------
+    # PARADAS
+    # --------------------------------------------------------
+
+    hsaves = stats[
+        "home_saves"
+    ]
+
+    asaves = stats[
+        "away_saves"
+    ]
+
+    if (
+        hsaves is not None
+        and asaves is not None
+    ):
+
+        total_saves = (
+            hsaves + asaves
+        )
+
+        for line in [
+            2.5,
+            3.5,
+            4.5,
+            5.5,
+            6.5
+        ]:
+
+            probability = poisson_over(
+                total_saves,
+                line
+            )
+
+            predictions.append({
+
+                "market":
+                "🧤 Paradas",
+
+                "selection":
+                f"Más de {line}",
+
+                "probability":
+                probability,
+
+                "source":
+                "Estadística real del partido",
+
+            })
+
+    return predictions
+
+
+# ============================================================
+# FOOTBALL-DATA: CLASIFICACIÓN
+# ============================================================
+
+@st.cache_data(ttl=1800)
+def get_standings(
+    competition_code: str
+):
+
+    data, error = football_data_get(
+        f"/competitions/"
+        f"{competition_code}/standings"
+    )
+
+    if error:
+        return pd.DataFrame(), error
+
+    rows = []
+
+    standings = data.get(
+        "standings",
+        []
+    )
+
+    for table in standings:
+
+        if table.get(
+            "type"
+        ) != "TOTAL":
+            continue
+
+        for row in table.get(
+            "table",
+            []
+        ):
+
+            team = row.get(
+                "team",
+                {}
+            )
+
+            rows.append({
+
+                "Pos":
+                row.get(
+                    "position"
+                ),
+
+                "Equipo":
+                team.get(
+                    "name"
+                ),
+
+                "PJ":
+                row.get(
+                    "playedGames"
+                ),
+
+                "G":
+                row.get(
+                    "won"
+                ),
+
+                "E":
+                row.get(
+                    "draw"
+                ),
+
+                "P":
+                row.get(
+                    "lost"
+                ),
+
+                "GF":
+                row.get(
+                    "goalsFor"
+                ),
+
+                "GC":
+                row.get(
+                    "goalsAgainst"
+                ),
+
+                "Pts":
+                row.get(
+                    "points"
+                ),
+            })
+
+    return pd.DataFrame(
+        rows
+    ), None
+
+
+# ============================================================
+# MAPEAR CUOTAS
+# ============================================================
+
+def normalise_text(
+    text
+):
+
+    if text is None:
+        return ""
+
+    return (
+        str(text)
+        .lower()
+        .strip()
+    )
+
+
+def extract_odds(
+    fixture_odds
+):
+
+    rows = []
+
+    for block in fixture_odds:
+
+        bookmakers = block.get(
+            "bookmakers",
             []
         )
 
-        team_stats = {}
+        for bookmaker in bookmakers:
 
-        standings_response = requests.get(
-            standings_url,
-            headers=headers,
-            timeout=15
-        )
-
-        if standings_response.status_code == 200:
-
-            standings = (
-                standings_response
-                .json()
-                .get(
-                    "standings",
-                    []
-                )
-            )
-
-            for table in standings:
-
-                if table.get("type") != "TOTAL":
-                    continue
-
-                for row in table.get(
-                    "table",
-                    []
-                ):
-
-                    team = row[
-                        "team"
-                    ]["name"]
-
-                    games = max(
-                        1,
-                        row.get(
-                            "playedGames",
-                            1
-                        )
-                    )
-
-                    team_stats[
-                        team
-                    ] = {
-
-                        "gf":
-                        row.get(
-                            "goalsFor",
-                            0
-                        ) / games,
-
-                        "ga":
-                        row.get(
-                            "goalsAgainst",
-                            0
-                        ) / games,
-
-                        "played":
-                        games
-                    }
-
-        odds_df = load_real_odds()
-
-        rows = []
-
-        for match in matches:
-
-            home = match[
-                "homeTeam"
-            ]["name"]
-
-            away = match[
-                "awayTeam"
-            ]["name"]
-
-            home_crest = match[
-                "homeTeam"
-            ].get(
-                "crest",
-                ""
-            )
-
-            away_crest = match[
-                "awayTeam"
-            ].get(
-                "crest",
-                ""
-            )
-
-            (
-                date_text,
-                date_obj,
-                time_text
-            ) = parse_date(
-                match.get(
-                    "utcDate",
+            bookmaker_name = (
+                bookmaker.get(
+                    "name",
                     ""
                 )
             )
 
-            h = team_stats.get(
-                home,
-                {
-                    "gf": 1.3,
-                    "ga": 1.3,
-                    "played": 0
-                }
-            )
+            for bet in bookmaker.get(
+                "bets",
+                []
+            ):
 
-            a = team_stats.get(
-                away,
-                {
-                    "gf": 1.3,
-                    "ga": 1.3,
-                    "played": 0
-                }
-            )
-
-            # =================================================
-            # MODELO DE GOLES
-            # =================================================
-
-            home_xg = (
-                h["gf"] + a["ga"]
-            ) / 2
-
-            away_xg = (
-                a["gf"] + h["ga"]
-            ) / 2
-
-            total_xg = (
-                home_xg + away_xg
-            )
-
-            total_xg = max(
-                .2,
-                min(6, total_xg)
-            )
-
-            p_goals = poisson_prob_over(
-                total_xg,
-                2.5
-            )
-
-            # =================================================
-            # MODELO DE CÓRNERS
-            # =================================================
-
-            expected_corners = (
-                DEFAULT_CORNERS
-                + (
-                    home_xg - 1.3
-                ) * 1.0
-                + (
-                    away_xg - 1.3
-                ) * .8
-            )
-
-            expected_corners = max(
-                5,
-                min(
-                    15,
-                    expected_corners
-                )
-            )
-
-            p_corners = poisson_prob_over(
-                expected_corners,
-                9.5
-            )
-
-            # =================================================
-            # MODELO DE TARJETAS
-            # =================================================
-
-            p_cards = poisson_prob_over(
-                DEFAULT_CARDS,
-                4.5
-            )
-
-            # =================================================
-            # MODELO DE TIROS A PUERTA
-            # =================================================
-
-            expected_sot = (
-                DEFAULT_SOT
-                +
-                (
-                    total_xg - 2.6
-                ) * 1.5
-            )
-
-            expected_sot = max(
-                4,
-                min(
-                    15,
-                    expected_sot
-                )
-            )
-
-            p_sot = poisson_prob_over(
-                expected_sot,
-                8.5
-            )
-
-            markets = [
-
-                (
-                    "goals",
-                    "⚽ Goles",
-                    "+2.5",
-                    p_goals
-                ),
-
-                (
-                    "corners",
-                    "📐 Córners",
-                    "+9.5",
-                    p_corners
-                ),
-
-                (
-                    "cards",
-                    "🟨 Tarjetas",
-                    "+4.5",
-                    p_cards
-                ),
-
-                (
-                    "sot",
-                    "🎯 Tiros a puerta",
-                    "+8.5",
-                    p_sot
-                )
-            ]
-
-            for (
-                code,
-                name,
-                line,
-                probability
-            ) in markets:
-
-                if probability < MIN_PROBABILITY:
-                    continue
-
-                odds, bookmaker = get_real_odds(
-                    odds_df,
-                    home,
-                    away,
-                    code,
-                    line
+                market_name = (
+                    bet.get(
+                        "name",
+                        ""
+                    )
                 )
 
-                fair = fair_odds(
-                    probability
+                values = bet.get(
+                    "values",
+                    []
                 )
 
-                ev = expected_value(
-                    probability,
-                    odds
-                )
+                for value in values:
 
-                edge = edge_probability(
-                    probability,
-                    odds
-                )
+                    odd = value.get(
+                        "odd"
+                    )
 
-                rows.append([
+                    if odd is None:
+                        continue
 
-                    home,
-                    away,
+                    try:
+                        odd = float(
+                            str(odd)
+                            .replace(
+                                ",",
+                                "."
+                            )
+                        )
+                    except Exception:
+                        continue
 
-                    home_crest,
-                    away_crest,
+                    if odd <= 1:
+                        continue
 
-                    date_text,
-                    date_obj,
-                    time_text,
+                    rows.append({
 
-                    code,
-                    name,
-                    line,
+                        "bookmaker":
+                        bookmaker_name,
 
-                    probability,
-                    fair,
+                        "market":
+                        market_name,
 
-                    odds,
-                    ev,
-                    edge,
+                        "value":
+                        value.get(
+                            "value",
+                            ""
+                        ),
 
-                    bookmaker
-                ])
+                        "odd":
+                        odd,
+                    })
 
-        if not rows:
-
-            return (
-                pd.DataFrame(),
-                "No hay partidos disponibles."
-            )
-
-        columns = [
-
-            "home",
-            "away",
-
-            "home_crest",
-            "away_crest",
-
-            "date",
-            "date_obj",
-            "time",
-
-            "market_code",
-            "market",
-            "line",
-
-            "probability",
-            "fair_odds",
-
-            "odds",
-            "ev",
-            "edge",
-
-            "bookmaker"
-        ]
-
-        return (
-            pd.DataFrame(
-                rows,
-                columns=columns
-            ),
-            "OK"
-        )
-
-    except Exception as e:
-
-        return (
-            pd.DataFrame(),
-            str(e)
-        )
+    return rows
 
 
-# ============================================================
-# TARJETA DE APUESTA
-# ============================================================
+def find_market_odds(
+    odds_rows,
+    market,
+    selection
+):
 
-def render_value_card(row):
+    if not odds_rows:
+        return None, None
 
-    probability = (
-        row["probability"] * 100
+    target_market = normalise_text(
+        market
     )
 
-    fair = row["fair_odds"]
+    target_selection = normalise_text(
+        selection
+    )
 
-    odds = row["odds"]
+    for row in odds_rows:
 
-    ev = row["ev"]
-
-    if pd.isna(odds):
-
-        odds_text = "—"
-        ev_text = "—"
-
-        badge = (
-            '<span class="no-odds-badge">'
-            'SIN CUOTA'
-            '</span>'
+        current_market = (
+            normalise_text(
+                row["market"]
+            )
         )
 
-    else:
-
-        odds_text = f"{odds:.2f}"
-
-        ev_text = (
-            f"{ev * 100:+.1f}%"
+        current_value = (
+            normalise_text(
+                row["value"]
+            )
         )
 
-        if ev >= .08:
+        if (
+            target_market in current_market
+            or
+            current_market in target_market
+        ):
 
-            badge = (
-                '<span class="value-badge">'
-                '🔥 VALUE ALTO'
-                '</span>'
+            if (
+                target_selection in
+                current_value
+            ):
+
+                return (
+                    row["odd"],
+                    row["bookmaker"]
+                )
+
+    return None, None
+
+
+# ============================================================
+# CONSTRUIR FILAS DE PRONÓSTICOS
+# ============================================================
+
+def create_predictions_for_fixture(
+    fixture
+):
+
+    fixture_id = fixture[
+        "fixture"
+    ].get(
+        "id"
+    )
+
+    teams = fixture[
+        "teams"
+    ]
+
+    home = teams[
+        "home"
+    ]
+
+    away = teams[
+        "away"
+    ]
+
+    predictions = (
+        build_match_predictions(
+            fixture
+        )
+    )
+
+    if not predictions:
+        return []
+
+    odds_response, _ = (
+        get_fixture_odds(
+            fixture_id
+        )
+    )
+
+    odds_rows = extract_odds(
+        odds_response
+    )
+
+    output = []
+
+    for prediction in predictions:
+
+        probability = (
+            prediction[
+                "probability"
+            ]
+        )
+
+        selection = (
+            prediction[
+                "selection"
+            ]
+        )
+
+        market = (
+            prediction[
+                "market"
+            ]
+        )
+
+        # Convertimos nombres de UI a nombres
+        # que normalmente aparecen en las casas/API.
+
+        if "Córners" in market:
+
+            api_market = "Corners"
+
+        elif "Tarjetas" in market:
+
+            api_market = "Total Cards"
+
+        elif "Tiros a puerta" in market:
+
+            api_market = (
+                "Shots on Goal"
             )
 
-        elif ev >= .03:
+        elif "Paradas" in market:
 
-            badge = (
-                '<span class="value-badge">'
-                '🟢 VALUE'
-                '</span>'
-            )
+            api_market = "Goalkeeper Saves"
 
         else:
 
-            badge = (
-                '<span class="neutral-badge">'
-                '⚖️ NEUTRAL'
-                '</span>'
+            api_market = market
+
+        odd, bookmaker = (
+            find_market_odds(
+                odds_rows,
+                api_market,
+                selection
             )
+        )
 
-    home_img = ""
+        fair = fair_odds(
+            probability
+        )
 
-    away_img = ""
+        ev = calculate_ev(
+            probability,
+            odd
+        )
 
-    if row["home_crest"]:
+        fixture_date = fixture[
+            "fixture"
+        ].get(
+            "date"
+        )
 
-        home_img = (
-            f'<img src="{row["home_crest"]}" '
+        round_name = fixture[
+            "league"
+        ].get(
+            "round",
+            "Jornada no indicada"
+        )
+
+        output.append({
+
+            "fixture_id":
+            fixture_id,
+
+            "round":
+            round_name,
+
+            "date_raw":
+            fixture_date,
+
+            "date":
+            local_date_string(
+                fixture_date
+            ),
+
+            "time":
+            local_time_string(
+                fixture_date
+            ),
+
+            "home":
+            home.get(
+                "name"
+            ),
+
+            "away":
+            away.get(
+                "name"
+            ),
+
+            "home_logo":
+            home.get(
+                "logo",
+                ""
+            ),
+
+            "away_logo":
+            away.get(
+                "logo",
+                ""
+            ),
+
+            "market":
+            market,
+
+            "selection":
+            selection,
+
+            "probability":
+            probability,
+
+            "fair_odds":
+            fair,
+
+            "odds":
+            odd,
+
+            "ev":
+            ev,
+
+            "bookmaker":
+            bookmaker,
+
+            "source":
+            prediction[
+                "source"
+            ],
+
+        })
+
+    return output
+
+
+# ============================================================
+# FUNCIÓN PARA NORMALIZAR JORNADAS
+# ============================================================
+
+def round_sort_key(
+    round_name
+):
+
+    if not round_name:
+        return 9999
+
+    match = re.search(
+        r"(\d+)",
+        str(round_name)
+    )
+
+    if match:
+
+        return int(
+            match.group(1)
+        )
+
+    return 9999
+
+
+# ============================================================
+# CARGAR JORNADA ACTUAL
+# ============================================================
+
+@st.cache_data(ttl=900)
+def load_round_fixtures(
+    league_id,
+    season,
+    round_name
+):
+
+    fixtures, error = (
+        get_fixtures_by_round(
+            league_id,
+            season,
+            round_name
+        )
+    )
+
+    if error:
+        return pd.DataFrame(), error
+
+    rows = []
+
+    for fixture in fixtures:
+
+        fixture_info = fixture.get(
+            "fixture",
+            {}
+        )
+
+        teams = fixture.get(
+            "teams",
+            {}
+        )
+
+        league = fixture.get(
+            "league",
+            {}
+        )
+
+        rows.append({
+
+            "fixture_id":
+            fixture_info.get(
+                "id"
+            ),
+
+            "date_raw":
+            fixture_info.get(
+                "date"
+            ),
+
+            "date":
+            local_date_string(
+                fixture_info.get(
+                    "date"
+                )
+            ),
+
+            "time":
+            local_time_string(
+                fixture_info.get(
+                    "date"
+                )
+            ),
+
+            "home":
+            teams.get(
+                "home",
+                {}
+            ).get(
+                "name"
+            ),
+
+            "away":
+            teams.get(
+                "away",
+                {}
+            ).get(
+                "name"
+            ),
+
+            "home_logo":
+            teams.get(
+                "home",
+                {}
+            ).get(
+                "logo",
+                ""
+            ),
+
+            "away_logo":
+            teams.get(
+                "away",
+                {}
+            ).get(
+                "logo",
+                ""
+            ),
+
+            "status":
+            fixture_info.get(
+                "status",
+                {}
+            ).get(
+                "short"
+            ),
+
+            "round":
+            league.get(
+                "round",
+                round_name
+            ),
+        })
+
+    return (
+        pd.DataFrame(
+            rows
+        ).sort_values(
+            [
+                "date_raw",
+                "time"
+            ]
+        ),
+        None
+    )
+
+
+# ============================================================
+# RENDER PARTIDO
+# ============================================================
+
+def render_match(
+    row,
+    fixture_details=None
+):
+
+    home_logo = ""
+
+    away_logo = ""
+
+    if row.get(
+        "home_logo"
+    ):
+
+        home_logo = (
+            f'<img src="{row["home_logo"]}" '
             f'width="22" '
             f'style="vertical-align:middle;'
-            f'margin-right:7px;">'
+            f'margin-right:6px;">'
         )
 
-    if row["away_crest"]:
+    if row.get(
+        "away_logo"
+    ):
 
-        away_img = (
-            f'<img src="{row["away_crest"]}" '
+        away_logo = (
+            f'<img src="{row["away_logo"]}" '
             f'width="22" '
             f'style="vertical-align:middle;'
-            f'margin-right:7px;">'
+            f'margin-right:6px;">'
         )
-
-    bookmaker = row["bookmaker"]
-
-    if bookmaker:
-
-        bookmaker_html = (
-            f'<div class="small-note">'
-            f'Cuota: {bookmaker}'
-            f'</div>'
-        )
-
-    else:
-
-        bookmaker_html = ""
 
     st.markdown(
         f"""
-        <div class="value-card">
+        <div class="match-card">
 
-            <div class="match-header">
-
-                <div class="match-teams">
-
-                    {home_img}
-                    {row["home"]}
-
-                    <span style="
-                    opacity:.45;
-                    padding:0 6px;
-                    ">
-                    vs
-                    </span>
-
-                    {away_img}
-                    {row["away"]}
-
-                </div>
-
-                <div class="match-date">
-
-                    {row["date"]}
-                    ·
-                    {row["time"]}
-
-                </div>
-
-            </div>
-
-            <div class="market-title">
-
-                {row["market"]}
-                <span style="opacity:.55;">
-                {row["line"]}
-                </span>
-
+            <div class="match-date">
+                📅 {row["date"]}
                 &nbsp;&nbsp;
-
-                {badge}
-
+                ⏰ {row["time"]}
             </div>
 
             <div style="
-            display:grid;
-            grid-template-columns:
-            repeat(4,1fr);
-            gap:8px;
+                margin-top:8px;
+                display:flex;
+                justify-content:space-between;
+                align-items:center;
             ">
 
-                <div class="metric-box">
-
-                    <div class="metric-label">
-                    PROBABILIDAD
-                    </div>
-
-                    <div class="metric-value">
-                    {probability:.1f}%
-                    </div>
-
+                <div class="team-line">
+                    {home_logo}
+                    {row["home"]}
                 </div>
 
-                <div class="metric-box">
-
-                    <div class="metric-label">
-                    CUOTA
-                    </div>
-
-                    <div class="metric-value">
-                    {odds_text}
-                    </div>
-
+                <div style="
+                    opacity:.4;
+                    font-weight:800;
+                ">
+                    VS
                 </div>
 
-                <div class="metric-box">
-
-                    <div class="metric-label">
-                    CUOTA JUSTA
-                    </div>
-
-                    <div class="metric-value">
-                    {fair:.2f}
-                    </div>
-
-                </div>
-
-                <div class="metric-box">
-
-                    <div class="metric-label">
-                    EV
-                    </div>
-
-                    <div class="metric-value ev-positive">
-                    {ev_text}
-                    </div>
-
+                <div class="team-line">
+                    {away_logo}
+                    {row["away"]}
                 </div>
 
             </div>
-
-            {bookmaker_html}
 
         </div>
         """,
@@ -998,154 +1775,499 @@ def render_value_card(row):
 
 
 # ============================================================
-# APP PRINCIPAL
+# RENDER PRONÓSTICO
+# ============================================================
+
+def render_prediction(
+    row
+):
+
+    probability = (
+        row["probability"]
+        * 100
+    )
+
+    fair = row[
+        "fair_odds"
+    ]
+
+    odds = row[
+        "odds"
+    ]
+
+    ev = row[
+        "ev"
+    ]
+
+    if odds is None:
+
+        odds_text = "—"
+
+        badge = (
+            '<span class="no-odds-badge">'
+            'SIN CUOTA REAL'
+            '</span>'
+        )
+
+        ev_text = "—"
+
+    else:
+
+        odds_text = (
+            f"{odds:.2f}"
+        )
+
+        if ev is not None:
+
+            ev_text = (
+                f"{ev * 100:+.1f}%"
+            )
+
+            if ev > 0:
+
+                badge = (
+                    '<span class="value-badge">'
+                    '🔥 VALUE'
+                    '</span>'
+                )
+
+            else:
+
+                badge = (
+                    '<span class="no-value-badge">'
+                    'SIN VALUE'
+                    '</span>'
+                )
+
+        else:
+
+            ev_text = "—"
+
+            badge = (
+                '<span class="no-value-badge">'
+                'PRONÓSTICO'
+                '</span>'
+            )
+
+    fair_text = (
+        f"{fair:.2f}"
+        if fair is not None
+        else "—"
+    )
+
+    bookmaker = (
+        row.get(
+            "bookmaker"
+        )
+        or ""
+    )
+
+    bookmaker_text = ""
+
+    if bookmaker:
+
+        bookmaker_text = (
+            f'<div class="info-line">'
+            f'Cuota de: {bookmaker}'
+            f'</div>'
+        )
+
+    st.markdown(
+        f"""
+        <div class="market-card">
+
+            <div style="
+                display:flex;
+                justify-content:space-between;
+                align-items:center;
+                margin-bottom:8px;
+            ">
+
+                <div class="market-title">
+                    {row["market"]}
+                    · {row["selection"]}
+                </div>
+
+                <div>
+                    {badge}
+                </div>
+
+            </div>
+
+            <div style="
+                display:grid;
+                grid-template-columns:
+                repeat(4,1fr);
+                gap:6px;
+            ">
+
+                <div class="metric">
+
+                    <div class="metric-label">
+                        PROBABILIDAD
+                    </div>
+
+                    <div class="metric-value">
+                        {probability:.1f}%
+                    </div>
+
+                </div>
+
+                <div class="metric">
+
+                    <div class="metric-label">
+                        CUOTA REAL
+                    </div>
+
+                    <div class="metric-value">
+                        {odds_text}
+                    </div>
+
+                </div>
+
+                <div class="metric">
+
+                    <div class="metric-label">
+                        CUOTA JUSTA
+                    </div>
+
+                    <div class="metric-value">
+                        {fair_text}
+                    </div>
+
+                </div>
+
+                <div class="metric">
+
+                    <div class="metric-label">
+                        EV
+                    </div>
+
+                    <div class="metric-value">
+                        {ev_text}
+                    </div>
+
+                </div>
+
+            </div>
+
+            <div style="margin-top:6px;">
+                {bookmaker_text}
+            </div>
+
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+
+# ============================================================
+# APP
 # ============================================================
 
 def main():
 
-    # ========================================================
-    # HEADER CORREGIDO
-    # ========================================================
+    # --------------------------------------------------------
+    # HEADER
+    # --------------------------------------------------------
 
-    st.title("⚽ ValueBet Pro")
-    st.caption("Análisis de mercados de fútbol")
-
-    # ========================================================
-    # COMPETICIONES
-    # ========================================================
-
-    competitions = {
-
-        "🇪🇸 La Liga": "PD",
-
-        "🇬🇧 Premier League": "PL",
-
-        "🇪🇺 Champions League": "CL",
-
-        "🇮🇹 Serie A": "SA",
-
-        "🇩🇪 Bundesliga": "BL1",
-
-        "🇫🇷 Ligue 1": "FL1"
-    }
-
-    col1, col2 = st.columns(
-        [5, 1]
+    st.markdown(
+        '<div class="main-title">'
+        '⚽ ValueBet Pro V7'
+        '</div>',
+        unsafe_allow_html=True
     )
 
-    with col1:
+    st.markdown(
+        '<div class="subtitle">'
+        'Datos reales · Pronósticos · Value'
+        '</div>',
+        unsafe_allow_html=True
+    )
 
-        league_name = st.selectbox(
+    # --------------------------------------------------------
+    # CONFIGURACIÓN
+    # --------------------------------------------------------
+
+    with st.sidebar:
+
+        st.header(
+            "⚙️ Configuración"
+        )
+
+        competition_name = st.selectbox(
             "Competición",
             list(
-                competitions.keys()
-            ),
-            label_visibility="collapsed"
+                COMPETITIONS.keys()
+            )
         )
 
-    with col2:
-
-        refresh = st.button(
-            "🔄 Actualizar",
-            use_container_width=True
+        season = st.number_input(
+            "Temporada",
+            min_value=2020,
+            max_value=2030,
+            value=2026,
+            step=1
         )
 
-    if refresh:
+        st.divider()
 
-        st.cache_data.clear()
+        min_probability = st.slider(
+            "Probabilidad mínima (%)",
+            40,
+            90,
+            50,
+            1
+        )
 
-        st.rerun()
+        min_ev = st.slider(
+            "EV mínimo (%)",
+            -20,
+            50,
+            0,
+            1
+        )
 
-    competition = competitions[
-        league_name
+        st.divider()
+
+        st.caption(
+            "Las cuotas solo se consideran "
+            "Value cuando existe una cuota "
+            "real devuelta por la API."
+        )
+
+    competition = COMPETITIONS[
+        competition_name
     ]
 
-    # ========================================================
-    # CARGAR DATOS
-    # ========================================================
+    league_id = competition[
+        "api_football"
+    ]
 
-    df, message = load_data(
-        competition
+    football_data_code = (
+        competition[
+            "football_data"
+        ]
     )
 
-    if df.empty:
+    # --------------------------------------------------------
+    # CARGA JORNADAS
+    # --------------------------------------------------------
+
+    rounds, round_error = get_rounds(
+        league_id,
+        season
+    )
+
+    if round_error:
 
         st.error(
-            f"⚠️ {message}"
+            f"Error obteniendo jornadas: "
+            f"{round_error}"
         )
 
         return
 
-    df["probability_pct"] = (
-        df["probability"] * 100
+    if not rounds:
+
+        st.warning(
+            "API-Football no ha devuelto "
+            "jornadas para esta competición "
+            "y temporada."
+        )
+
+        return
+
+    rounds = sorted(
+        rounds,
+        key=round_sort_key
     )
 
-    # ========================================================
-    # PESTAÑAS
-    # ========================================================
+    # --------------------------------------------------------
+    # TABS
+    # --------------------------------------------------------
 
     (
-        tab_top,
+        tab_predictions,
         tab_matches,
-        tab_bank
+        tab_table
     ) = st.tabs(
         [
-            "🔥 Top Value",
+            "🔮 Pronósticos",
             "📅 Partidos",
-            "💰 Stake"
+            "🏆 Clasificación"
         ]
     )
 
     # ========================================================
-    # TOP VALUE
+    # PRONÓSTICOS
     # ========================================================
 
-    with tab_top:
+    with tab_predictions:
 
         st.markdown(
             '<div class="section-title">'
-            '🔥 Mejores oportunidades'
+            '🔮 Pronósticos'
             '</div>',
             unsafe_allow_html=True
         )
 
-        selected_date = st.date_input(
-            "Fecha",
-            value=datetime.now().date(),
-            label_visibility="collapsed"
+        st.caption(
+            "Aquí aparecen estimaciones basadas "
+            "únicamente en datos disponibles. "
+            "Sin cuota real no se calcula Value."
         )
 
-        day = df[
-            df["date_obj"] == selected_date
-        ].copy()
-
-        # Solo mostramos value cuando hay cuota real
-
-        value = day[
-            day["odds"].notna()
-        ].copy()
-
-        value = value.sort_values(
-            "ev",
-            ascending=False
+        selected_round = st.selectbox(
+            "Jornada",
+            rounds,
+            key="prediction_round"
         )
 
-        if value.empty:
+        fixtures, error = (
+            get_fixtures_by_round(
+                league_id,
+                season,
+                selected_round
+            )
+        )
+
+        if error:
+
+            st.error(
+                error
+            )
+
+        elif not fixtures:
 
             st.info(
-                "No hay cuotas reales cargadas "
-                "para esta fecha."
+                "No hay partidos devueltos "
+                "por API-Football para esta jornada."
             )
 
         else:
 
-            for _, row in value.head(
-                15
-            ).iterrows():
+            # Solo procesamos los partidos
+            # de la jornada seleccionada.
+            #
+            # Se consulta fixture por fixture
+            # para mantener controlado el consumo.
 
-                render_value_card(
-                    row
+            prediction_rows = []
+
+            for fixture in fixtures:
+
+                status = fixture[
+                    "fixture"
+                ].get(
+                    "status",
+                    {}
+                ).get(
+                    "short"
                 )
+
+                # Los partidos futuros no tienen
+                # estadísticas del propio partido.
+                #
+                # Por tanto, no fabricamos pronósticos
+                # con datos inexistentes.
+                #
+                # En V7.1 añadiremos el histórico
+                # de partidos anteriores por equipo.
+
+                if status not in [
+                    "NS",
+                    "TBD",
+                    "PST"
+                ]:
+
+                    rows = (
+                        create_predictions_for_fixture(
+                            fixture
+                        )
+                    )
+
+                    prediction_rows.extend(
+                        rows
+                    )
+
+            if not prediction_rows:
+
+                st.info(
+                    "Todavía no hay suficientes "
+                    "estadísticas reales disponibles "
+                    "para generar pronósticos de "
+                    "esta jornada."
+                )
+
+            else:
+
+                predictions_df = pd.DataFrame(
+                    prediction_rows
+                )
+
+                predictions_df = (
+                    predictions_df[
+                        predictions_df[
+                            "probability"
+                        ]
+                        >=
+                        (
+                            min_probability
+                            / 100
+                        )
+                    ]
+                    .copy()
+                )
+
+                if predictions_df.empty:
+
+                    st.info(
+                        "No hay pronósticos que "
+                        "superen la probabilidad "
+                        "mínima seleccionada."
+                    )
+
+                else:
+
+                    # Primero Value real
+
+                    predictions_df[
+                        "ev_sort"
+                    ] = predictions_df[
+                        "ev"
+                    ].fillna(
+                        -999
+                    )
+
+                    predictions_df = (
+                        predictions_df
+                        .sort_values(
+                            [
+                                "ev_sort",
+                                "probability"
+                            ],
+                            ascending=False
+                        )
+                    )
+
+                    for _, row in (
+                        predictions_df
+                        .head(50)
+                        .iterrows()
+                    ):
+
+                        st.markdown(
+                            f"### "
+                            f"{row['date']} · "
+                            f"{row['time']} · "
+                            f"{row['home']} vs "
+                            f"{row['away']}"
+                        )
+
+                        render_prediction(
+                            row
+                        )
 
     # ========================================================
     # PARTIDOS
@@ -1155,145 +2277,106 @@ def main():
 
         st.markdown(
             '<div class="section-title">'
-            '📅 Partidos'
+            '📅 Partidos por jornada'
             '</div>',
             unsafe_allow_html=True
         )
 
-        matches = (
-            df[
-                [
-                    "home",
-                    "away",
-                    "date",
-                    "time"
-                ]
-            ]
-            .drop_duplicates()
-            .sort_values(
-                [
-                    "date",
-                    "time"
-                ]
+        st.caption(
+            "Fecha, hora y equipos procedentes "
+            "directamente de API-Football."
+        )
+
+        # Elegimos si mostrar todas las jornadas
+        # o una concreta para no sobrecargar móvil.
+
+        round_to_show = st.selectbox(
+            "Seleccionar jornada",
+            rounds,
+            key="matches_round"
+        )
+
+        fixtures_df, error = (
+            load_round_fixtures(
+                league_id,
+                season,
+                round_to_show
             )
         )
 
-        for _, match in matches.iterrows():
+        if error:
 
-            home = match["home"]
+            st.error(
+                error
+            )
 
-            away = match["away"]
-
-            subset = df[
-                (df["home"] == home)
-                &
-                (df["away"] == away)
-            ]
-
-            with st.expander(
-                f"{match['date']} "
-                f"· {match['time']} "
-                f"  {home} vs {away}"
-            ):
-
-                for _, row in subset.iterrows():
-
-                    render_value_card(
-                        row
-                    )
-
-    # ========================================================
-    # STAKE
-    # ========================================================
-
-    with tab_bank:
-
-        st.markdown(
-            '<div class="section-title">'
-            '💰 Calculadora de stake'
-            '</div>',
-            unsafe_allow_html=True
-        )
-
-        bank = st.number_input(
-            "Bankroll (€)",
-            min_value=10.0,
-            value=500.0,
-            step=50.0
-        )
-
-        kelly = st.slider(
-            "Kelly fraccionado",
-            .05,
-            .50,
-            .25,
-            .05
-        )
-
-        max_pct = st.slider(
-            "Máximo por apuesta (%)",
-            .25,
-            5.0,
-            2.0,
-            .25
-        )
-
-        eligible = df[
-            df["odds"].notna()
-            &
-            df["ev"].notna()
-            &
-            (df["ev"] > 0)
-        ].sort_values(
-            "ev",
-            ascending=False
-        )
-
-        if eligible.empty:
+        elif fixtures_df.empty:
 
             st.info(
-                "No hay apuestas con EV positivo."
+                "No hay partidos para esta jornada."
             )
 
         else:
 
-            best = eligible.iloc[0]
-
-            stake_pct = kelly_fraction(
-                best["probability"],
-                best["odds"],
-                fraction=kelly,
-                maximum=max_pct / 100
-            )
-
-            stake = (
-                bank * stake_pct
-            )
-
-            st.success(
+            st.markdown(
                 f"""
-**{best["home"]} vs {best["away"]}**
-
-{best["market"]} {best["line"]}
-
-Probabilidad:
-**{best["probability"]*100:.1f}%**
-
-Cuota:
-**{best["odds"]:.2f}**
-
-EV:
-**{best["ev"]*100:+.1f}%**
-
-Stake orientativo:
-**€{stake:.2f}**
-"""
+                <div class="round-card">
+                    <b>{round_to_show}</b>
+                    <div class="info-line">
+                        {len(fixtures_df)}
+                        partidos encontrados
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True
             )
 
-            st.caption(
-                "El stake es una referencia matemática. "
-                "Un modelo puede equivocarse y el EV "
-                "estimado no garantiza beneficio."
+            for _, row in (
+                fixtures_df.iterrows()
+            ):
+
+                render_match(
+                    row
+                )
+
+    # ========================================================
+    # CLASIFICACIÓN
+    # ========================================================
+
+    with tab_table:
+
+        st.markdown(
+            '<div class="section-title">'
+            '🏆 Clasificación'
+            '</div>',
+            unsafe_allow_html=True
+        )
+
+        standings, error = (
+            get_standings(
+                football_data_code
+            )
+        )
+
+        if error:
+
+            st.error(
+                error
+            )
+
+        elif standings.empty:
+
+            st.info(
+                "No hay clasificación "
+                "disponible en football-data.org."
+            )
+
+        else:
+
+            st.dataframe(
+                standings,
+                hide_index=True,
+                use_container_width=True
             )
 
     # ========================================================
@@ -1303,12 +2386,13 @@ Stake orientativo:
     st.divider()
 
     st.caption(
-        "ValueBet Football Pro V6.5.1"
+        "ValueBet Football Pro V7 · "
+        "Datos de API-Football + football-data.org"
     )
 
 
 # ============================================================
-# EJECUCIÓN
+# START
 # ============================================================
 
 if __name__ == "__main__":
