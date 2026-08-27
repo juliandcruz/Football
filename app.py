@@ -55,18 +55,29 @@ def load_multimarket_data(competition="PD"):
         
         matches_data = resp_matches.json().get("matches", [])
         
+        # Extraer estadísticas detalladas de Local y Visitante de la API
         team_stats = {}
         resp_standings = requests.get(standings_url, headers=headers, timeout=10)
         if resp_standings.status_code == 200:
             standings_data = resp_standings.json().get("standings", [])
             for st_type in standings_data:
-                if st_type.get("type") == "TOTAL":
+                table_type = st_type.get("type") # "TOTAL", "HOME", "AWAY"
+                if table_type in ["HOME", "AWAY"]:
                     for row in st_type.get("table", []):
                         t_name = row["team"]["name"]
                         played = max(1, row.get("playedGames", 1))
                         gf = row.get("goalsFor", 0) / played
                         ga = row.get("goalsAgainst", 0) / played
-                        team_stats[t_name] = {"gf": gf, "ga": ga}
+                        
+                        if t_name not in team_stats:
+                            team_stats[t_name] = {}
+                        
+                        if table_type == "HOME":
+                            team_stats[t_name]["home_gf"] = gf
+                            team_stats[t_name]["home_ga"] = ga
+                        else:
+                            team_stats[t_name]["away_gf"] = gf
+                            team_stats[t_name]["away_ga"] = ga
         
         league_avg_goals = 1.3
         parsed_data = []
@@ -88,11 +99,18 @@ def load_multimarket_data(competition="PD"):
                 match_date_obj = datetime.now().date()
                 match_time = ""
 
-            h_stat = team_stats.get(home, {"gf": league_avg_goals, "ga": league_avg_goals})
-            a_stat = team_stats.get(away, {"gf": league_avg_goals, "ga": league_avg_goals})
+            # Obtener estadísticas específicas de Local/Visitante con respaldo a la media de la liga
+            h_data = team_stats.get(home, {})
+            a_data = team_stats.get(away, {})
             
-            home_exp_g = (h_stat["gf"] + a_stat["ga"]) / 2
-            away_exp_g = (a_stat["gf"] + h_stat["ga"]) / 2
+            h_gf = h_data.get("home_gf", league_avg_goals)
+            h_ga = h_data.get("home_ga", league_avg_goals)
+            a_gf = a_data.get("away_gf", league_avg_goals)
+            a_ga = a_data.get("away_ga", league_avg_goals)
+            
+            # Modelo avanzado: Ataque Local vs Defensa Visitante, y Ataque Visitante vs Defensa Local
+            home_exp_g = (h_gf + a_ga) / 2
+            away_exp_g = (a_gf + h_ga) / 2
             
             prob_goals = poisson_prob_over(home_exp_g + away_exp_g, 2.5)
             fair_g = 1 / prob_goals
@@ -169,7 +187,7 @@ def main():
     tab_top, tab_matches, tab_sim = st.tabs(["🔥 Top Value por Fecha", "📅 Partidos y Mercados", "💰 Simulador"])
 
     with tab_top:
-        st.caption(f"{competitions[liga_seleccionada]['emblem']} Selecciona una fecha para ver las mejores oportunidades del día con probabilidad > 45%")
+        st.caption(f"{competitions[liga_seleccionada]['emblem']} Pronósticos basados en rendimiento real de Local y Visitante (Prob > 45%)")
         
         col_date, col_info = st.columns([2, 3])
         with col_date:
@@ -267,7 +285,7 @@ def main():
             st.success(f"Sugerencia para la mejor oportunidad ({s.home} vs {s.away}): **€{stake:.2f}** ({stake/bank*100:.1f}% de tu bank).")
 
     st.divider()
-    st.caption("ValueBet Football Pro V6.3 — Fixed & Optimized")
+    st.caption("ValueBet Football Pro V7.0 — Advanced Home/Away Statistical Engine")
 
 if __name__ == "__main__":
     main()
