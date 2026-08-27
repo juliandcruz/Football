@@ -2002,12 +2002,10 @@ def main():
             )
         )
 
-        season = st.number_input(
-            "Temporada",
-            min_value=2020,
-            max_value=2030,
-            value=2026,
-            step=1
+        season = st.selectbox(
+            "Temporada disponible",
+            [2024, 2023, 2022],
+            index=0
         )
 
         st.divider()
