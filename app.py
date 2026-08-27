@@ -227,24 +227,6 @@ def get_secret(name: str) -> Optional[str]:
 
 
 # ============================================================
-# RENDER HTML SIN QUE MARKDOWN LO CONFUNDA CON UN BLOQUE DE CÓDIGO
-# ============================================================
-#
-# Streamlit renderiza markdown con CommonMark: cualquier línea que
-# empieza con 4 o más espacios de sangría se interpreta como un
-# bloque de código preformateado, no como HTML. Como este archivo
-# está escrito con mucha indentación (por estilo), las tarjetas de
-# partidos/pronósticos se mostraban como texto plano en vez de
-# renderizarse. Esta función quita la sangría de cada línea antes
-# de pasarla a st.markdown, sin tocar el HTML en sí.
-
-def render_html(content: str):
-    lines = content.split("\n")
-    dedented = "\n".join(line.lstrip() for line in lines)
-    st.markdown(dedented, unsafe_allow_html=True)
-
-
-# ============================================================
 # CONTADOR DE PETICIONES API (clave en plan gratuito)
 # ============================================================
 #
@@ -1113,16 +1095,13 @@ def get_historical_fixture_statistics_batch(
     fixture_ids: Tuple[int, ...]
 ):
     """
-    Obtiene estadísticas de varios partidos históricos en el menor
+    Obtiene datos básicos de varios partidos históricos en el menor
     número posible de peticiones HTTP, agrupando hasta 20 IDs por
     llamada (límite del endpoint /fixtures?ids=... de API-Football).
 
-    Antes, build_complete_pre_match_team_profile pedía las
-    estadísticas de cada partido histórico UNA A UNA (hasta 20
-    peticiones por equipo, 40 por partido a pronosticar). Con el
-    plan gratuito eso agota la cuota diaria en un solo partido.
-    Con el batching, esos mismos 20 partidos históricos se piden
-    en 1 sola petición.
+    NOTA: este endpoint devuelve equipos, goles y marcador, pero
+    NO las estadísticas de mercados (córners, tiros, tarjetas,
+    paradas). Para esas se usa get_fixture_statistics_single.
     """
 
     if not fixture_ids:
@@ -1162,6 +1141,41 @@ def get_historical_fixture_statistics_batch(
     return result_by_id, error_out
 
 
+@st.cache_data(ttl=21600)
+def get_fixture_statistics_single(
+    fixture_id: int
+):
+    """
+    Obtiene las estadísticas reales de UN partido desde el
+    endpoint /fixtures/statistics?fixture={id}.
+
+    Este endpoint sí devuelve: Corner Kicks, Total Shots, Shots
+    on Goal, Yellow Cards, Red Cards, Goalkeeper Saves, etc.
+
+    Se cachea individualmente (ttl 6h) para que, si se vuelven a
+    pedir las mismas jornadas o equipos en la sesión, no se
+    repitan las peticiones.
+    """
+    data, error = api_football_get(
+        "/fixtures/statistics",
+        {
+            "fixture": fixture_id
+        }
+    )
+
+    if error:
+        return None, error
+
+    response = data.get("response", [])
+
+    if not response:
+        return None, None
+
+    # Devuelve el array tal cual; add_market_stats_to_team_profile
+    # lo procesa con extract_team_statistics.
+    return response, None
+
+
 MARKET_STAT_NAMES = [
     "corners",
     "shots",
@@ -1175,7 +1189,8 @@ MARKET_STAT_NAMES = [
 def add_market_stats_to_team_profile(
     profile,
     fixture,
-    team_id
+    team_id,
+    stats_response=None
 ):
     """
     Añade al perfil las estadísticas del partido desde la perspectiva
@@ -1186,9 +1201,14 @@ def add_market_stats_to_team_profile(
     ...), igual que ya se hacía con los goles. Esto importa porque
     un equipo suele generar más córners/tiros jugando en casa, y
     antes esa señal se perdía al mezclarlo todo en una sola media.
-    """
-    stats = fixture_statistics(fixture)
 
+    stats_response: array de bloques por equipo proveniente del
+    endpoint /fixtures/statistics. Si se proporciona, se usa en
+    lugar de buscar "statistics" dentro del fixture (que nunca
+    está presente en el endpoint /fixtures).
+    """
+    # Determinar local/visitante desde el fixture básico
+    # (el endpoint /fixtures/statistics no incluye esa info).
     teams = fixture.get("teams", {})
     home_id = teams.get("home", {}).get("id")
     away_id = teams.get("away", {}).get("id")
@@ -1203,6 +1223,58 @@ def add_market_stats_to_team_profile(
         venue = "away"
     else:
         return
+
+    # Obtener estadísticas numéricas del equipo y su oponente.
+    if stats_response is not None:
+        # Formato del endpoint /fixtures/statistics:
+        # [{"team": {"id": X}, "statistics": [{"type": "Corner Kicks", "value": 5}, ...]}, ...]
+        team_stats_map = {}
+        for team_block in stats_response:
+            tid = team_block.get("team", {}).get("id")
+            if not tid:
+                continue
+            block_stats = {}
+            for item in team_block.get("statistics", []):
+                name = item.get("type")
+                value = item.get("value")
+                if name:
+                    block_stats[name] = clean_stat_value(value)
+            team_stats_map[tid] = block_stats
+
+        my_stats = team_stats_map.get(team_id, {})
+
+        opponent_id = None
+        for tid in team_stats_map:
+            if tid != team_id:
+                opponent_id = tid
+                break
+
+        opp_stats = team_stats_map.get(opponent_id, {}) if opponent_id else {}
+
+        # Construir el dict stats con claves compatibles
+        # con el formato {"home_corners": X, "away_corners": Y, ...}
+        def val(block, names):
+            for n in names:
+                if n in block:
+                    return block[n]
+            return None
+
+        stats = {}
+        stat_defs = [
+            ("corners", ["Corner Kicks"]),
+            ("shots", ["Total Shots"]),
+            ("sot", ["Shots on Goal"]),
+            ("yellow", ["Yellow Cards"]),
+            ("red", ["Red Cards"]),
+            ("saves", ["Goalkeeper Saves"]),
+        ]
+        for stat_name, api_names in stat_defs:
+            stats[f"{prefix}_{stat_name}"] = val(my_stats, api_names)
+            stats[f"{opponent_prefix}_{stat_name}"] = val(opp_stats, api_names)
+    else:
+        # Fallback: intentar extraer del fixture directamente
+        # (no debería usarse, pero lo dejamos por compatibilidad).
+        stats = fixture_statistics(fixture)
 
     mappings = {
         "corners_for": f"{prefix}_corners",
@@ -1375,27 +1447,31 @@ def build_complete_pre_match_team_profile(
             profile["away_goals_against"].append(ga)
 
     # Estadísticas de mercados (córners, tiros, tarjetas, paradas):
-    # se piden TODAS de golpe con el endpoint por lotes.
-    fixture_ids = tuple(
-        f.get("fixture", {}).get("id")
-        for f in fixtures
-        if f.get("fixture", {}).get("id")
-    )
-
-    details_by_id, _ = get_historical_fixture_statistics_batch(
-        fixture_ids
-    )
-
+    #
+    # El endpoint /fixtures?ids= (batch) NO devuelve estadísticas.
+    # Se necesita /fixtures/statistics?fixture={id} para cada partido.
+    # Cada llamada se cachea 6h, así que repeticiones del mismo equipo
+    # en la sesión no consumen peticiones extra.
+    #
+    # Se usa el fixture original (del batch) para saber local/visitante,
+    # y la respuesta de /fixtures/statistics para los valores reales.
     for fixture in fixtures:
 
         fixture_id = fixture.get("fixture", {}).get("id")
-        detail = details_by_id.get(fixture_id)
 
-        if detail:
+        if not fixture_id:
+            continue
+
+        stats_response, _ = get_fixture_statistics_single(
+            fixture_id
+        )
+
+        if stats_response:
             add_market_stats_to_team_profile(
                 profile,
-                detail,
-                team_id
+                fixture,
+                team_id,
+                stats_response=stats_response,
             )
 
     result = {
@@ -2096,14 +2172,6 @@ def create_predictions_for_fixture(
             ]
         )
 
-        # Si el modelo Poisson no pudo calcular una probabilidad
-        # (p.ej. valor esperado <= 0 o datos insuficientes), se
-        # descarta la fila en vez de dejar un None que rompe las
-        # comparaciones numéricas más adelante (predictions_df
-        # ["probability"] >= min_probability lanzaba TypeError).
-        if probability is None:
-            continue
-
         selection = (
             prediction[
                 "selection"
@@ -2291,22 +2359,11 @@ def run_calibration_check(
     habrían hecho ANTES del partido y las compara con lo que pasó
     realmente. Devuelve una lista de filas para mostrar en tabla.
     """
-    fixture_ids = tuple(
-        f.get("fixture", {}).get("id")
-        for f in fixtures
-        if f.get("fixture", {}).get("id")
-    )
-
-    details_by_id, _ = get_historical_fixture_statistics_batch(
-        fixture_ids
-    )
-
     rows = []
 
     for fixture in fixtures:
 
         fixture_id = fixture.get("fixture", {}).get("id")
-        detail = details_by_id.get(fixture_id, fixture)
 
         teams = fixture.get("teams", {})
         home_name = teams.get("home", {}).get("name", "?")
@@ -2323,7 +2380,35 @@ def run_calibration_check(
             lookback_matches,
         )
 
-        actual_stats = fixture_statistics(detail)
+        # Obtener estadísticas reales del partido para calibración.
+        stats_response, _ = get_fixture_statistics_single(
+            fixture_id
+        ) if fixture_id else (None, None)
+
+        if stats_response:
+            # Construir dict tipo {"home_corners": X, "away_corners": Y}
+            home_id = teams.get("home", {}).get("id")
+            actual_stats = {}
+            for team_block in stats_response:
+                tid = team_block.get("team", {}).get("id")
+                block_stats = {}
+                for item in team_block.get("statistics", []):
+                    name = item.get("type")
+                    value = item.get("value")
+                    if name:
+                        block_stats[name] = clean_stat_value(value)
+                if tid == home_id:
+                    actual_stats["home_corners"] = block_stats.get("Corner Kicks")
+                    actual_stats["home_sot"] = block_stats.get("Shots on Goal")
+                    actual_stats["home_yellow"] = block_stats.get("Yellow Cards")
+                    actual_stats["home_saves"] = block_stats.get("Goalkeeper Saves")
+                else:
+                    actual_stats["away_corners"] = block_stats.get("Corner Kicks")
+                    actual_stats["away_sot"] = block_stats.get("Shots on Goal")
+                    actual_stats["away_yellow"] = block_stats.get("Yellow Cards")
+                    actual_stats["away_saves"] = block_stats.get("Goalkeeper Saves")
+        else:
+            actual_stats = {}
 
         for prediction in predictions:
 
@@ -2562,7 +2647,7 @@ def render_match(
             f'margin-right:6px;">'
         )
 
-    render_html(
+    st.markdown(
         f"""
         <div class="match-card">
 
@@ -2599,7 +2684,8 @@ def render_match(
             </div>
 
         </div>
-        """
+        """,
+        unsafe_allow_html=True
     )
 
 
@@ -2701,7 +2787,7 @@ def render_prediction(
             f'</div>'
         )
 
-    render_html(
+    st.markdown(
         f"""
         <div class="market-card">
 
@@ -2785,7 +2871,8 @@ def render_prediction(
             </div>
 
         </div>
-        """
+        """,
+        unsafe_allow_html=True
     )
 
 
@@ -3164,17 +3251,11 @@ def main():
                     prediction_rows
                 )
 
-                # Blindaje adicional: nos aseguramos de que la
-                # columna sea numérica antes de comparar, para no
-                # romper si algún valor llega como None/NaN.
-                probability_num = pd.to_numeric(
-                    predictions_df["probability"],
-                    errors="coerce"
-                )
-
                 predictions_df = (
                     predictions_df[
-                        probability_num
+                        predictions_df[
+                            "probability"
+                        ]
                         >=
                         (
                             min_probability
@@ -3315,7 +3396,7 @@ def main():
 
         else:
 
-            render_html(
+            st.markdown(
                 f"""
                 <div class="round-card">
                     <b>{round_to_show}</b>
@@ -3324,7 +3405,8 @@ def main():
                         partidos encontrados
                     </div>
                 </div>
-                """
+                """,
+                unsafe_allow_html=True
             )
 
             for _, row in (
