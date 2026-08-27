@@ -220,12 +220,35 @@ def resolve_team_to_csv(api_team_name: str, csv_norm_to_original: dict):
 
 HISTORY_WINDOW_YEARS = 2
 
-MARKET_LINES = {
-    "⚽ Goles Totales": [1.5, 2.5, 3.5],
-    "📐 Córners Totales": [8.5, 9.5, 10.5],
-    "🟨 Tarjetas Totales": [2.5, 3.5, 4.5, 5.5],
-    "🎯 Disparos a Puerta": [6.5, 8.5, 10.5],
+# Cada mercado define:
+# - lines_total: líneas para el TOTAL DEL PARTIDO (goles/córners/etc.
+#   sumando ambos equipos)
+# - lines_team: líneas para CADA EQUIPO por separado (solo lo suyo,
+#   no se suma con el rival)
+MARKET_DEFINITIONS = {
+    "⚽ Goles": {
+        "lines_total": [1.5, 2.5, 3.5],
+        "lines_team": [0.5, 1.5, 2.5],
+    },
+    "📐 Córners": {
+        "lines_total": [8.5, 9.5, 10.5],
+        "lines_team": [3.5, 4.5, 5.5],
+    },
+    "🟨 Tarjetas": {
+        "lines_total": [2.5, 3.5, 4.5, 5.5],
+        "lines_team": [1.5, 2.5, 3.5],
+    },
+    "🎯 Disparos a puerta": {
+        "lines_total": [6.5, 8.5, 10.5],
+        "lines_team": [2.5, 3.5, 4.5],
+    },
+    "🟧 Faltas": {
+        "lines_total": [18.5, 21.5, 24.5],
+        "lines_team": [8.5, 10.5, 12.5],
+    },
 }
+
+TOTAL_LABEL = "Ambos equipos"
 
 
 def parse_csv_date_column(series: pd.Series) -> pd.Series:
@@ -321,6 +344,7 @@ def load_multimarket_data(competition="PD"):
             h_c, a_c = 4.8, 4.2
             h_y, a_y = 2.2, 2.4
             h_s, a_s = 4.5, 4.0
+            h_f, a_f = 11.5, 10.8
 
             has_required_cols = (
                 not df_hist.empty
@@ -362,87 +386,144 @@ def load_multimarket_data(competition="PD"):
                     if resolved_away else pd.DataFrame()
                 )
 
-                hg_list, ha_list, hc_list, hy_list, hs_list = [], [], [], [], []
+                hg_list, ha_list, hc_list, hy_list, hs_list, hf_list = [], [], [], [], [], []
                 if not home_games.empty:
                     hg_list.append(home_games['FTHG'].mean())
                     ha_list.append(home_games['FTAG'].mean())
                     if 'HC' in home_games.columns: hc_list.append(home_games['HC'].mean())
                     if 'HY' in home_games.columns: hy_list.append(home_games['HY'].mean())
                     if 'HST' in home_games.columns: hs_list.append(home_games['HST'].mean())
+                    if 'HF' in home_games.columns: hf_list.append(home_games['HF'].mean())
                 if not away_games_as_home.empty:
                     hg_list.append(away_games_as_home['FTAG'].mean())
                     ha_list.append(away_games_as_home['FTHG'].mean())
                     if 'AC' in away_games_as_home.columns: hc_list.append(away_games_as_home['AC'].mean())
                     if 'AY' in away_games_as_home.columns: hy_list.append(away_games_as_home['AY'].mean())
                     if 'AST' in away_games_as_home.columns: hs_list.append(away_games_as_home['AST'].mean())
+                    if 'AF' in away_games_as_home.columns: hf_list.append(away_games_as_home['AF'].mean())
 
                 if hg_list: h_gf = sum(hg_list) / len(hg_list)
                 if ha_list: h_ga = sum(ha_list) / len(ha_list)
                 if hc_list: h_c = sum(hc_list) / len(hc_list)
                 if hy_list: h_y = sum(hy_list) / len(hy_list)
                 if hs_list: h_s = sum(hs_list) / len(hs_list)
+                if hf_list: h_f = sum(hf_list) / len(hf_list)
 
-                ag_list, aa_list, ac_list, ay_list, as_list = [], [], [], [], []
+                ag_list, aa_list, ac_list, ay_list, as_list, af_list = [], [], [], [], [], []
                 if not away_games.empty:
                     ag_list.append(away_games['FTAG'].mean())
                     aa_list.append(away_games['FTHG'].mean())
                     if 'AC' in away_games.columns: ac_list.append(away_games['AC'].mean())
                     if 'AY' in away_games.columns: ay_list.append(away_games['AY'].mean())
                     if 'AST' in away_games.columns: as_list.append(away_games['AST'].mean())
+                    if 'AF' in away_games.columns: af_list.append(away_games['AF'].mean())
                 if not home_games_as_away.empty:
                     ag_list.append(home_games_as_away['FTHG'].mean())
                     aa_list.append(home_games_as_away['FTAG'].mean())
                     if 'HC' in home_games_as_away.columns: ac_list.append(home_games_as_away['HC'].mean())
                     if 'HY' in home_games_as_away.columns: ay_list.append(home_games_as_away['HY'].mean())
                     if 'HST' in home_games_as_away.columns: as_list.append(home_games_as_away['HST'].mean())
+                    if 'HF' in home_games_as_away.columns: af_list.append(home_games_as_away['HF'].mean())
 
                 if ag_list: a_gf = sum(ag_list) / len(ag_list)
                 if aa_list: a_ga = sum(aa_list) / len(aa_list)
                 if ac_list: a_c = sum(ac_list) / len(ac_list)
                 if ay_list: a_y = sum(ay_list) / len(ay_list)
                 if as_list: a_s = sum(as_list) / len(as_list)
+                if af_list: a_f = sum(af_list) / len(af_list)
 
             home_exp_g = max(0.3, (h_gf + a_ga) / 2)
             away_exp_g = max(0.3, (a_gf + h_ga) / 2)
-            total_exp_goals = home_exp_g + away_exp_g
-
-            exp_corners = max(4.0, h_c + a_c)
-            exp_cards = max(1.5, h_y + a_y)
-            exp_shots = max(3.0, h_s + a_s)
 
             rand_factor = (hash(home + away) % 15) / 100.0
 
-            expected_by_market = {
-                "⚽ Goles Totales": (total_exp_goals, rand_factor),
-                "📐 Córners Totales": (exp_corners, rand_factor / 2),
-                "🟨 Tarjetas Totales": (exp_cards, rand_factor),
-                "🎯 Disparos a Puerta": (exp_shots, rand_factor),
+            # Para cada mercado: expected value del equipo local,
+            # del equipo visitante, y el total (suma de ambos).
+            # "margin" es el margen de cuota simulado — se mantiene
+            # igual que antes por mercado.
+            market_expected = {
+                "⚽ Goles": {
+                    "home": home_exp_g,
+                    "away": away_exp_g,
+                    "margin": rand_factor,
+                },
+                "📐 Córners": {
+                    "home": h_c,
+                    "away": a_c,
+                    "margin": rand_factor / 2,
+                },
+                "🟨 Tarjetas": {
+                    "home": h_y,
+                    "away": a_y,
+                    "margin": rand_factor,
+                },
+                "🎯 Disparos a puerta": {
+                    "home": h_s,
+                    "away": a_s,
+                    "margin": rand_factor,
+                },
+                "🟧 Faltas": {
+                    "home": h_f,
+                    "away": a_f,
+                    "margin": rand_factor,
+                },
             }
 
-            for market_name, lines in MARKET_LINES.items():
+            floor_by_market = {
+                # (suelo mínimo por equipo, suelo mínimo total)
+                "⚽ Goles": (0.3, 0.6),
+                "📐 Córners": (2.0, 4.0),
+                "🟨 Tarjetas": (0.8, 1.5),
+                "🎯 Disparos a puerta": (1.5, 3.0),
+                "🟧 Faltas": (5.0, 10.0),
+            }
 
-                expected_value, margin_factor = expected_by_market[market_name]
+            def add_row(market_name, team_label, line, expected_value, margin_factor):
+                prob = poisson_prob_over(expected_value, line)
+                fair = 1 / prob
+                odds = round(fair * (0.92 + margin_factor), 2)
+                ev = (prob * odds) - 1
 
-                for line in lines:
+                if prob >= 0.20:
+                    rating = "🔥 VALUE" if ev > 0.02 else "⚖️ NEUTRAL"
+                    parsed_data.append([
+                        home, away, home_crest, away_crest, match_date_str, match_date_obj, match_time,
+                        market_name, team_label, f"+{line}", prob, odds, fair, ev, rating
+                    ])
 
-                    prob = poisson_prob_over(expected_value, line)
-                    fair = 1 / prob
-                    odds = round(fair * (0.92 + margin_factor), 2)
-                    ev = (prob * odds) - 1
+            for market_name, definition in MARKET_DEFINITIONS.items():
 
-                    if prob >= 0.20:
-                        rating = "🔥 VALUE" if ev > 0.02 else "⚖️ NEUTRAL"
-                        parsed_data.append([
-                            home, away, home_crest, away_crest, match_date_str, match_date_obj, match_time,
-                            market_name, f"+{line}", prob, odds, fair, ev, rating
-                        ])
+                info = market_expected[market_name]
+                team_floor, total_floor = floor_by_market[market_name]
+
+                home_expected = max(team_floor, info["home"])
+                away_expected = max(team_floor, info["away"])
+                total_expected = max(total_floor, home_expected + away_expected)
+
+                # Mercado del PARTIDO (ambos equipos sumados)
+                for line in definition["lines_total"]:
+                    add_row(
+                        market_name, TOTAL_LABEL, line,
+                        total_expected, info["margin"]
+                    )
+
+                # Mercado POR EQUIPO (local y visitante por separado)
+                for line in definition["lines_team"]:
+                    add_row(
+                        market_name, home, line,
+                        home_expected, info["margin"]
+                    )
+                    add_row(
+                        market_name, away, line,
+                        away_expected, info["margin"]
+                    )
 
         diagnostics = sorted(unmatched_teams)
 
         if parsed_data:
             df_out = pd.DataFrame(
                 parsed_data,
-                columns=["home","away","home_crest","away_crest","date","date_obj","time","market","line","probability","odds","fair_odds","ev","rating"]
+                columns=["home","away","home_crest","away_crest","date","date_obj","time","market","team","line","probability","odds","fair_odds","ev","rating"]
             )
             return df_out, "OK", diagnostics
         else:
@@ -515,14 +596,19 @@ def main():
                 
                 home_img = f'<img src="{r.home_crest}" width="20" style="vertical-align:middle;margin-right:6px;">' if r.home_crest else ''
                 away_img = f'<img src="{r.away_crest}" width="20" style="vertical-align:middle;margin-left:6px;margin-right:6px;">' if r.away_crest else ''
-                
+
+                team_tag = (
+                    "Total partido" if r.team == TOTAL_LABEL
+                    else f"{r.team} (solo su equipo)"
+                )
+
                 render_html(f"""
                 <div class="match-card">
                   <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.8rem; opacity:0.8; margin-bottom:6px;">
                     <span>{home_img} {r.home} vs {away_img} {r.away}</span>
                     <span>📅 {r.date} — ⏰ {r.time}</span>
                   </div>
-                  <div style="font-weight:700; font-size:1.05rem; margin: 4px 0;">{r.market} ({r.line})</div>
+                  <div style="font-weight:700; font-size:1.05rem; margin: 4px 0;">{r.market} ({r.line}) <span style="font-weight:400; font-size:0.75rem; opacity:0.65;">· {team_tag}</span></div>
                   <div>Prob: <b>{r.probability_pct:.1f}%</b> | Cuota: <b>{r.odds:.2f}</b> <span class="{badge_class}">EV {ev_p:+.1f}%</span></div>
                 </div>
                 """)
@@ -549,18 +635,38 @@ def main():
                   <div>{a_img}<b>{a}</b></div>
                 </div>
                 """)
-                
-                for _, r in subset.iterrows():
+
+                scope_filter = st.radio(
+                    "Ver mercados de:",
+                    ["Total del partido", f"Solo {h}", f"Solo {a}"],
+                    horizontal=True,
+                    key=f"scope_{h}_{a}_{m_date}_{m_time}",
+                )
+
+                if scope_filter == "Total del partido":
+                    subset_view = subset[subset["team"] == TOTAL_LABEL]
+                elif scope_filter == f"Solo {h}":
+                    subset_view = subset[subset["team"] == h]
+                else:
+                    subset_view = subset[subset["team"] == a]
+
+                for _, r in subset_view.iterrows():
                     ev_p = float(r.ev) * 100
                     color_ev = '#2ecc71' if ev_p > 0 else '#e74c3c'
                     badge_bg = 'rgba(46, 204, 113, 0.12)' if ev_p > 0 else 'rgba(231, 76, 60, 0.12)'
-                    
+
+                    team_tag = (
+                        "Total partido (ambos equipos)" if r.team == TOTAL_LABEL
+                        else f"Solo {r.team}"
+                    )
+
                     render_html(f"""
                     <div class="market-box">
                       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
                         <span style="font-weight:700; font-size:0.95rem;">{r.market} <span style="opacity:0.7; font-weight:normal;">({r.line})</span></span>
                         <span style="background:{badge_bg}; color:{color_ev}; padding:2px 8px; border-radius:6px; font-weight:700; font-size:0.8rem;">EV {ev_p:+.1f}%</span>
                       </div>
+                      <div style="font-size:0.75rem; opacity:0.6; margin-bottom:4px;">{team_tag}</div>
                       <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.85rem; opacity:0.85; margin-top:6px;">
                         <div>Probabilidad: <b>{r.probability_pct:.1f}%</b></div>
                         <div>Cuota: <b>{r.odds:.2f}</b> <span style="font-size:0.75rem; opacity:0.6;">(Justa: {r.fair_odds:.2f})</span></div>
@@ -576,10 +682,16 @@ def main():
         if not df.empty:
 
             df_sim = df.copy()
+            df_sim["team_scope"] = np.where(
+                df_sim["team"] == TOTAL_LABEL,
+                "Total partido",
+                "Solo " + df_sim["team"],
+            )
             df_sim["label"] = (
                 df_sim["date"] + " " + df_sim["time"] + " · "
                 + df_sim["home"] + " vs " + df_sim["away"] + " — "
                 + df_sim["market"] + " " + df_sim["line"]
+                + " [" + df_sim["team_scope"] + "]"
                 + " (EV " + (df_sim["ev"] * 100).round(1).astype(str) + "%)"
             )
 
