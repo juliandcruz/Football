@@ -8,6 +8,7 @@ import os
 import re
 import unicodedata
 import difflib
+import time
 
 st.set_page_config(
     page_title="ValueBet Football Pro",
@@ -265,6 +266,15 @@ def api_football_get(endpoint, params):
     Llamada HTTP a API-Football con contador de peticiones visible
     en sesión (igual patrón que usamos en el otro proyecto para no
     perder de vista el consumo de cuota).
+
+    Incluye una pequeña pausa MÍNIMA entre peticiones consecutivas.
+    No es por el límite diario (100/día), sino por el límite POR
+    MINUTO de su plan gratuito: sus términos de servicio permiten
+    suspender la cuenta automáticamente ante "patrones de petición
+    abusivos, desproporcionados o excesivos", y varias llamadas
+    seguidas sin pausa (como pedir equipos + jugadores de 2 equipos
+    en una sola ejecución) pueden parecer tráfico de bot aunque
+    estés muy por debajo de la cuota diaria.
     """
     key = get_api_football_key()
 
@@ -273,6 +283,15 @@ def api_football_get(endpoint, params):
 
     if "api_football_call_count" not in st.session_state:
         st.session_state["api_football_call_count"] = 0
+
+    if "api_football_last_call_ts" not in st.session_state:
+        st.session_state["api_football_last_call_ts"] = 0.0
+
+    min_gap_seconds = 1.2
+
+    elapsed = time.time() - st.session_state["api_football_last_call_ts"]
+    if elapsed < min_gap_seconds:
+        time.sleep(min_gap_seconds - elapsed)
 
     st.session_state["api_football_call_count"] += 1
 
@@ -285,6 +304,8 @@ def api_football_get(endpoint, params):
             params=params,
             timeout=20,
         )
+
+        st.session_state["api_football_last_call_ts"] = time.time()
 
         if response.status_code != 200:
             return None, f"Error API-Football ({response.status_code})"
@@ -451,6 +472,280 @@ def build_player_predictions(
         "fouls_committed": top("fouls_committed_per_game"),
         "fouls_drawn": top("fouls_drawn_per_game"),
         "errors": [e for e in [home_error, away_error] if e],
+        "sample_size": len(all_players),
+    }
+
+
+# ============================================================
+# ESTADÍSTICAS DE JUGADOR — FUENTE ALTERNATIVA: FBref
+# ============================================================
+#
+# A diferencia de API-Football, FBref no depende de una cuenta que
+# se pueda suspender ni de una cuota diaria — es gratis siempre.
+# No tiene API oficial, así que se obtiene con web scraping, PERO
+# a diferencia de sitios como Sofascore o FotMob (que prohíben el
+# scraping sin excepción en sus términos), FBref/Sports-Reference
+# publica una política explícita tolerando bots que respeten un
+# límite de 10 peticiones/minuto (sports-reference.com/bot-traffic).
+# Aquí nos quedamos por debajo de eso (1 petición cada 7s ≈ 8,6/min,
+# con margen real bajo su límite de 10/min) y
+# cacheamos agresivamente para no repetir peticiones innecesarias.
+#
+# Esto es para uso personal (tus propias decisiones de apuesta), no
+# para redistribuir los datos — su ToS prohíbe explícitamente
+# revender/ceder el contenido del sitio a terceros.
+
+FBREF_BASE_URL = "https://fbref.com"
+
+FBREF_MIN_GAP_SECONDS = 7.0
+
+# id de competición en FBref + nombre usado en la URL
+FBREF_COMPETITIONS = {
+    "PD": (12, "La-Liga"),
+    "PL": (9, "Premier-League"),
+    "SA": (11, "Serie-A"),
+    "BL1": (20, "Bundesliga"),
+    "FL1": (13, "Ligue-1"),
+    "CL": (8, "Champions-League"),
+}
+
+FBREF_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (compatible; ValueBetFootballApp/1.0; "
+        "personal-use-only)"
+    )
+}
+
+
+def fbref_current_season_string(today: datetime = None) -> str:
+    """
+    FBref identifica las temporadas europeas como "2024-2025". Las
+    temporadas empiezan a mediados de año (julio/agosto), así que
+    antes de esa fecha consideramos que seguimos en la temporada
+    que empezó el año anterior.
+    """
+    today = today or datetime.now()
+    if today.month >= 7:
+        return f"{today.year}-{today.year + 1}"
+    return f"{today.year - 1}-{today.year}"
+
+
+def fbref_rate_limited_get(url: str):
+    """
+    GET a FBref respetando el límite de 10 peticiones/minuto que
+    ellos mismos publican como tolerado para bots — nos quedamos
+    en ~8,6 peticiones/minuto, por debajo de su límite de 10/min,
+    pero en la práctica muy por debajo porque los resultados se
+    cachean 24h).
+    """
+    if "fbref_last_call_ts" not in st.session_state:
+        st.session_state["fbref_last_call_ts"] = 0.0
+
+    elapsed = time.time() - st.session_state["fbref_last_call_ts"]
+    if elapsed < FBREF_MIN_GAP_SECONDS:
+        time.sleep(FBREF_MIN_GAP_SECONDS - elapsed)
+
+    try:
+        response = requests.get(url, headers=FBREF_HEADERS, timeout=20)
+        st.session_state["fbref_last_call_ts"] = time.time()
+
+        if response.status_code != 200:
+            return None, f"Error FBref ({response.status_code})"
+
+        return response.text, None
+
+    except Exception as e:
+        return None, str(e)
+
+
+def fbref_parse_player_table(html: str, wanted_columns):
+    """
+    Extrae la tabla "grande" de jugadores de una página de FBref.
+
+    Dos particularidades de FBref hay que tratar:
+    1) Varias tablas están envueltas en comentarios HTML
+       (<!-- ... -->) para carga diferida — hay que "descomentarlas"
+       antes de que pandas pueda verlas.
+    2) La tabla repite la fila de cabecera cada ~25 filas (para que
+       se vea al hacer scroll) — pandas las cuela como filas de
+       datos y hay que descartarlas.
+    """
+    uncommented = html.replace("<!--", "").replace("-->", "")
+
+    try:
+        tables = pd.read_html(uncommented)
+    except Exception as e:
+        return pd.DataFrame(), str(e)
+
+    if not tables:
+        return pd.DataFrame(), "No se encontraron tablas en la página."
+
+    # La tabla de jugadores es, con diferencia, la más larga de la
+    # página (una fila por jugador de toda la liga).
+    biggest = max(tables, key=lambda t: len(t))
+
+    # Las columnas de FBref vienen a veces en 2 niveles
+    # (p.ej. ("Standard","Sh")); nos quedamos con el nivel de abajo.
+    if isinstance(biggest.columns, pd.MultiIndex):
+        biggest.columns = [
+            col[-1] if isinstance(col, tuple) else col
+            for col in biggest.columns
+        ]
+
+    biggest = biggest.loc[:, ~biggest.columns.duplicated()]
+
+    missing = [c for c in wanted_columns if c not in biggest.columns]
+    if missing:
+        return pd.DataFrame(), f"Columnas no encontradas: {missing}"
+
+    df = biggest[wanted_columns].copy()
+
+    # Descarta filas de cabecera repetidas incrustadas como datos.
+    df = df[df["Player"] != "Player"]
+    df = df.dropna(subset=["Player"])
+
+    return df, None
+
+
+@st.cache_data(ttl=86400)
+def get_fbref_shooting_stats(competition_code: str, season: str):
+    """
+    Tiros / tiros a puerta por jugador de TODA la liga en una sola
+    petición (mucho más eficiente que pedir equipo a equipo).
+    """
+    if competition_code not in FBREF_COMPETITIONS:
+        return pd.DataFrame(), "Competición no mapeada en FBref."
+
+    comp_id, comp_slug = FBREF_COMPETITIONS[competition_code]
+    url = (
+        f"{FBREF_BASE_URL}/en/comps/{comp_id}/{season}/shooting/"
+        f"{season}-{comp_slug}-Stats"
+    )
+
+    html, error = fbref_rate_limited_get(url)
+    if error:
+        return pd.DataFrame(), error
+
+    df, error = fbref_parse_player_table(
+        html, ["Player", "Squad", "90s", "Sh", "SoT", "Sh/90", "SoT/90"]
+    )
+    return df, error
+
+
+@st.cache_data(ttl=86400)
+def get_fbref_misc_stats(competition_code: str, season: str):
+    """
+    Faltas cometidas/recibidas por jugador de toda la liga.
+    """
+    if competition_code not in FBREF_COMPETITIONS:
+        return pd.DataFrame(), "Competición no mapeada en FBref."
+
+    comp_id, comp_slug = FBREF_COMPETITIONS[competition_code]
+    url = (
+        f"{FBREF_BASE_URL}/en/comps/{comp_id}/{season}/misc/"
+        f"{season}-{comp_slug}-Stats"
+    )
+
+    html, error = fbref_rate_limited_get(url)
+    if error:
+        return pd.DataFrame(), error
+
+    df, error = fbref_parse_player_table(
+        html, ["Player", "Squad", "90s", "Fls", "Fld"]
+    )
+    return df, error
+
+
+def build_player_predictions_fbref(
+    home_name, away_name, competition_code, season
+):
+    """
+    Igual que build_player_predictions pero usando FBref: no
+    depende de mapear team_id (se filtra directamente por el
+    nombre de equipo de FBref, resuelto con nuestro mismo
+    resolver de nombres normalizado + alias + fuzzy).
+    """
+    shooting_df, shooting_error = get_fbref_shooting_stats(
+        competition_code, season
+    )
+    misc_df, misc_error = get_fbref_misc_stats(competition_code, season)
+
+    errors = [e for e in [shooting_error, misc_error] if e]
+
+    if shooting_df.empty and misc_df.empty:
+        return {
+            "shots_on": [], "fouls_committed": [], "fouls_drawn": [],
+            "errors": errors, "sample_size": 0,
+        }
+
+    all_squads = set()
+    if not shooting_df.empty:
+        all_squads.update(shooting_df["Squad"].unique())
+    if not misc_df.empty:
+        all_squads.update(misc_df["Squad"].unique())
+
+    norm_to_original = {
+        normalize_team_name(name): name for name in all_squads
+    }
+
+    resolved_home, _ = resolve_team_to_csv(home_name, norm_to_original)
+    resolved_away, _ = resolve_team_to_csv(away_name, norm_to_original)
+
+    if resolved_home is None:
+        errors.append(
+            f"No se encontró a '{home_name}' entre los equipos de FBref."
+        )
+    if resolved_away is None:
+        errors.append(
+            f"No se encontró a '{away_name}' entre los equipos de FBref."
+        )
+
+    target_squads = {resolved_home, resolved_away} - {None}
+
+    players = {}
+
+    if not shooting_df.empty:
+        subset = shooting_df[shooting_df["Squad"].isin(target_squads)]
+        for _, row in subset.iterrows():
+            nineties = pd.to_numeric(row.get("90s"), errors="coerce")
+            if pd.isna(nineties) or nineties < 1.0:
+                continue
+            sot_per_90 = pd.to_numeric(row.get("SoT/90"), errors="coerce")
+            if pd.isna(sot_per_90):
+                continue
+            players.setdefault(row["Player"], {
+                "name": row["Player"], "team": row["Squad"],
+                "appearances_90s": round(float(nineties), 1),
+            })["shots_on_per_game"] = float(sot_per_90)
+
+    if not misc_df.empty:
+        subset = misc_df[misc_df["Squad"].isin(target_squads)]
+        for _, row in subset.iterrows():
+            nineties = pd.to_numeric(row.get("90s"), errors="coerce")
+            if pd.isna(nineties) or nineties < 1.0:
+                continue
+            fls = pd.to_numeric(row.get("Fls"), errors="coerce")
+            fld = pd.to_numeric(row.get("Fld"), errors="coerce")
+            entry = players.setdefault(row["Player"], {
+                "name": row["Player"], "team": row["Squad"],
+                "appearances_90s": round(float(nineties), 1),
+            })
+            if not pd.isna(fls):
+                entry["fouls_committed_per_game"] = float(fls) / float(nineties)
+            if not pd.isna(fld):
+                entry["fouls_drawn_per_game"] = float(fld) / float(nineties)
+
+    all_players = list(players.values())
+
+    def top(metric, n=5):
+        candidates = [p for p in all_players if metric in p]
+        return sorted(candidates, key=lambda p: p[metric], reverse=True)[:n]
+
+    return {
+        "shots_on": top("shots_on_per_game"),
+        "fouls_committed": top("fouls_committed_per_game"),
+        "fouls_drawn": top("fouls_drawn_per_game"),
+        "errors": errors,
         "sample_size": len(all_players),
     }
 
@@ -774,11 +1069,107 @@ def render_player_predictions_section(home_name: str, away_name: str, competitio
     """
     Sección opt-in (bajo demanda) dentro de cada partido: qué
     jugador de los dos equipos tiene más tiros a puerta por partido
-    de media, y qué jugador comete/recibe más faltas — usando
-    API-Football, ya que la fuente principal de esta app no tiene
-    datos por jugador.
+    de media, y qué jugador comete/recibe más faltas.
+
+    Dos fuentes posibles, porque ninguna de las dos fuentes
+    principales de esta app tiene datos por jugador:
+    - API-Football: requiere clave propia, cuota diaria y cuenta
+      activa (puede suspenderse).
+    - FBref: gratis siempre, sin cuenta ni cuota — pero al no tener
+      API oficial se obtiene vía scraping respetuoso (ver política
+      publicada de FBref sobre tráfico de bots).
     """
-    st.markdown("**👤 Pronóstico de jugadores** (API-Football)")
+    st.markdown("**👤 Pronóstico de jugadores**")
+
+    source = st.radio(
+        "Fuente de datos",
+        ["FBref (gratis, sin cuenta)", "API-Football (requiere cuenta activa)"],
+        horizontal=True,
+        key=f"player_source_{home_name}_{away_name}",
+    )
+
+    if source.startswith("FBref"):
+        render_player_predictions_fbref(home_name, away_name, competition_code)
+    else:
+        render_player_predictions_api_football(home_name, away_name, competition_code)
+
+
+def render_player_predictions_fbref(home_name: str, away_name: str, competition_code: str):
+
+    if competition_code not in FBREF_COMPETITIONS:
+        st.caption(
+            "Esta competición no está mapeada a FBref todavía."
+        )
+        return
+
+    default_season = fbref_current_season_string()
+    year = int(default_season.split("-")[0])
+    season_options = [
+        f"{y}-{y + 1}" for y in range(year, year - 3, -1)
+    ]
+
+    col_season, col_button = st.columns([1, 1])
+
+    with col_season:
+        season = st.selectbox(
+            "Temporada de referencia",
+            season_options,
+            key=f"fbref_season_{home_name}_{away_name}",
+            help=(
+                "La temporada en curso puede tener pocos partidos "
+                "jugados todavía — si el ranking sale corto, prueba "
+                "con la temporada anterior."
+            ),
+        )
+
+    with col_button:
+        st.caption(
+            "Datos: FBref (Sports Reference) · sin cuenta, sin cuota"
+        )
+        run = st.button(
+            "▶️ Generar pronóstico de jugadores",
+            key=f"fbref_btn_{home_name}_{away_name}",
+        )
+
+    if not run:
+        st.caption(
+            "No se genera automáticamente para respetar el ritmo "
+            "de peticiones que FBref tolera para bots — pulsa el "
+            "botón cuando quieras verlo (puede tardar unos segundos "
+            "la primera vez; luego queda en caché 24h)."
+        )
+        return
+
+    with st.spinner("Consultando FBref (respetando su límite de peticiones)..."):
+        result = build_player_predictions_fbref(
+            home_name, away_name, competition_code, season
+        )
+
+    if result["errors"]:
+        for err in result["errors"]:
+            st.warning(f"⚠️ {err}")
+
+    if result["sample_size"] == 0:
+        st.info(
+            "No se encontraron jugadores con al menos 1 partido "
+            "completo (90 min. acumulados) para estos equipos en "
+            "esta temporada. Prueba con otra temporada, o puede que "
+            "el nombre del equipo no se haya reconocido bien en "
+            "FBref (revisa el aviso de arriba)."
+        )
+        return
+
+    _render_player_rankings(result, "appearances_90s", "90s jugados")
+
+    st.caption(
+        f"Basado en la temporada {season} (FBref) · jugadores con "
+        f"al menos 1 partido completo acumulado. Uso personal, no "
+        f"redistribuir estos datos (así lo pide FBref en sus "
+        f"condiciones de uso)."
+    )
+
+
+def render_player_predictions_api_football(home_name: str, away_name: str, competition_code: str):
 
     if competition_code not in API_FOOTBALL_LEAGUE_MAP:
         st.caption(
@@ -824,7 +1215,9 @@ def render_player_predictions_section(home_name: str, away_name: str, competitio
         st.caption(
             "No se generan automáticamente para no gastar cuota "
             "de API-Football sin pedirlo — pulsa el botón cuando "
-            "quieras verlo."
+            "quieras verlo. Cada pulsación hace varias peticiones "
+            "con una pequeña pausa entre ellas para respetar su "
+            "límite por minuto, así que puede tardar unos segundos."
         )
         return
 
@@ -857,6 +1250,18 @@ def render_player_predictions_section(home_name: str, away_name: str, competitio
         )
         return
 
+    _render_player_rankings(result, "appearances", "partidos jugados")
+
+    st.caption(
+        f"Basado en la temporada {season} de {league_display} "
+        f"(API-Football, plan gratuito) · "
+        f"jugadores con mínimo {MIN_APPEARANCES_FOR_PLAYER_STATS} "
+        f"partidos jugados."
+    )
+
+
+def _render_player_rankings(result, appearances_key, appearances_label):
+
     def render_ranking(title, players, metric, unit_label):
         st.markdown(f"##### {title}")
         if not players:
@@ -867,7 +1272,7 @@ def render_player_predictions_section(home_name: str, away_name: str, competitio
             st.write(
                 f"{medal} **{p['name']}** ({p['team']}) — "
                 f"{p[metric]:.2f} {unit_label} · "
-                f"{p['appearances']} partidos jugados"
+                f"{p.get(appearances_key, '?')} {appearances_label}"
             )
 
     col1, col2, col3 = st.columns(3)
@@ -889,13 +1294,6 @@ def render_player_predictions_section(home_name: str, away_name: str, competitio
             "🟢 Más faltas recibidas",
             result["fouls_drawn"], "fouls_drawn_per_game", "faltas/partido"
         )
-
-    st.caption(
-        f"Basado en la temporada {season} de {league_display} "
-        f"(API-Football, plan gratuito) · "
-        f"jugadores con mínimo {MIN_APPEARANCES_FOR_PLAYER_STATS} "
-        f"partidos jugados."
-    )
 
 
 def main():
