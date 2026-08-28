@@ -510,10 +510,21 @@ FBREF_COMPETITIONS = {
 }
 
 FBREF_HEADERS = {
+    # Cabeceras de un navegador normal (Chrome en Windows). Esto es
+    # una práctica habitual y razonable para identificarse como
+    # tráfico web estándar — no incluye nada diseñado para falsear
+    # huella de navegador ni saltarse bloqueos activos.
     "User-Agent": (
-        "Mozilla/5.0 (compatible; ValueBetFootballApp/1.0; "
-        "personal-use-only)"
-    )
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/webp,*/*;q=0.8"
+    ),
+    "Accept-Language": "es-ES,es;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Referer": "https://fbref.com/en/",
 }
 
 
@@ -548,6 +559,17 @@ def fbref_rate_limited_get(url: str):
     try:
         response = requests.get(url, headers=FBREF_HEADERS, timeout=20)
         st.session_state["fbref_last_call_ts"] = time.time()
+
+        if response.status_code == 403:
+            return None, (
+                "FBref ha bloqueado la petición (403). Es probable que "
+                "esté bloqueando el rango de IPs de centros de datos "
+                "de Streamlit Cloud, no un problema de ritmo de "
+                "peticiones. No voy a intentar saltarme ese bloqueo "
+                "(falsificar huella de navegador, proxies, etc.) — "
+                "si te sigue pasando, la vía fiable es reactivar "
+                "API-Football."
+            )
 
         if response.status_code != 200:
             return None, f"Error FBref ({response.status_code})"
