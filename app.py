@@ -524,7 +524,13 @@ FBREF_HEADERS = {
         "image/webp,*/*;q=0.8"
     ),
     "Accept-Language": "es-ES,es;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br",
     "Referer": "https://fbref.com/en/",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
 }
 
 
@@ -539,6 +545,28 @@ def fbref_current_season_string(today: datetime = None) -> str:
     if today.month >= 7:
         return f"{today.year}-{today.year + 1}"
     return f"{today.year - 1}-{today.year}"
+
+
+def get_fbref_session():
+    """
+    Reutiliza una única sesión (con sus cookies) durante toda la
+    sesión de Streamlit, en vez de peticiones sueltas sin estado.
+    Visitar primero la portada y guardar las cookies que da el
+    sitio es simplemente lo que hace cualquier navegador normal al
+    entrar por primera vez — no es un intento de evadir nada.
+    """
+    if "fbref_session" not in st.session_state:
+        session = requests.Session()
+        session.headers.update(FBREF_HEADERS)
+        try:
+            session.get(
+                "https://fbref.com/en/", timeout=20
+            )
+        except Exception:
+            pass
+        st.session_state["fbref_session"] = session
+
+    return st.session_state["fbref_session"]
 
 
 def fbref_rate_limited_get(url: str):
@@ -557,7 +585,8 @@ def fbref_rate_limited_get(url: str):
         time.sleep(FBREF_MIN_GAP_SECONDS - elapsed)
 
     try:
-        response = requests.get(url, headers=FBREF_HEADERS, timeout=20)
+        session = get_fbref_session()
+        response = session.get(url, timeout=20)
         st.session_state["fbref_last_call_ts"] = time.time()
 
         if response.status_code == 403:
