@@ -218,6 +218,243 @@ def resolve_team_to_csv(api_team_name: str, csv_norm_to_original: dict):
 
     return None, 0.0
 
+
+# ============================================================
+# ESTADÍSTICAS DE JUGADOR (API-Football)
+# ============================================================
+#
+# football-data.org (la API principal de esta app) y el CSV
+# histórico NO tienen datos a nivel de jugador — solo agregados de
+# equipo. Para "qué jugador tira más a puerta" o "qué jugador
+# comete/recibe más faltas" hace falta una fuente distinta.
+# API-Football sí expone esto vía /players?team=&season=.
+#
+# Este bloque es independiente del resto de la app y solo se llama
+# bajo demanda (botón explícito), porque en plan gratuito la cuota
+# de API-Football está muy limitada (100 peticiones/día).
+
+API_FOOTBALL_URL = "https://v3.football.api-sports.io"
+
+# Mapa de competición (código football-data.org) -> liga API-Football
+API_FOOTBALL_LEAGUE_MAP = {
+    "PD": (140, "La Liga"),
+    "PL": (39, "Premier League"),
+    "SA": (135, "Serie A"),
+    "BL1": (78, "Bundesliga"),
+    "FL1": (61, "Ligue 1"),
+    "CL": (2, "Champions League"),
+}
+
+# Temporadas disponibles en plan gratuito para las ligas grandes:
+# API-Football no da la temporada en curso para estas competiciones
+# en el plan gratuito, solo temporadas ya completadas.
+API_FOOTBALL_FREE_SEASONS = [2024, 2023, 2022]
+
+MIN_APPEARANCES_FOR_PLAYER_STATS = 3
+
+
+def get_api_football_key():
+    try:
+        return st.secrets["API_FOOTBALL_KEY"]
+    except Exception:
+        return None
+
+
+def api_football_get(endpoint, params):
+    """
+    Llamada HTTP a API-Football con contador de peticiones visible
+    en sesión (igual patrón que usamos en el otro proyecto para no
+    perder de vista el consumo de cuota).
+    """
+    key = get_api_football_key()
+
+    if not key:
+        return None, "Falta la clave API_FOOTBALL_KEY en st.secrets."
+
+    if "api_football_call_count" not in st.session_state:
+        st.session_state["api_football_call_count"] = 0
+
+    st.session_state["api_football_call_count"] += 1
+
+    headers = {"x-apisports-key": key}
+
+    try:
+        response = requests.get(
+            API_FOOTBALL_URL + endpoint,
+            headers=headers,
+            params=params,
+            timeout=20,
+        )
+
+        if response.status_code != 200:
+            return None, f"Error API-Football ({response.status_code})"
+
+        data = response.json()
+
+        if data.get("errors"):
+            return None, str(data["errors"])
+
+        return data, None
+
+    except Exception as e:
+        return None, str(e)
+
+
+@st.cache_data(ttl=21600)
+def get_api_football_teams(league_id: int, season: int):
+    """
+    Lista de equipos de una liga/temporada en API-Football (para
+    resolver nombre -> team_id). Una sola llamada por liga/temporada,
+    reutilizable para todos los partidos de esa liga.
+    """
+    data, error = api_football_get(
+        "/teams", {"league": league_id, "season": season}
+    )
+
+    if error or not data:
+        return {}, error
+
+    teams = {}
+    for entry in data.get("response", []):
+        team = entry.get("team", {})
+        name = team.get("name")
+        team_id = team.get("id")
+        if name and team_id:
+            teams[name] = team_id
+
+    return teams, None
+
+
+def resolve_api_football_team_id(team_name: str, teams_by_name: dict):
+    """
+    Reutiliza el mismo resolver de nombres (normalización + alias +
+    fuzzy) que usamos para el CSV, aplicado ahora contra la lista de
+    equipos de API-Football.
+    """
+    norm_to_original = {
+        normalize_team_name(name): name
+        for name in teams_by_name.keys()
+    }
+
+    resolved_name, score = resolve_team_to_csv(team_name, norm_to_original)
+
+    if resolved_name is None:
+        return None, 0.0
+
+    return teams_by_name.get(resolved_name), score
+
+
+@st.cache_data(ttl=21600)
+def get_team_players_stats(team_id: int, league_id: int, season: int):
+    """
+    Estadísticas de todos los jugadores de un equipo en una
+    temporada: tiros a puerta, faltas cometidas y faltas recibidas,
+    con nº de partidos jugados (para poder calcular una media por
+    partido y no solo el acumulado).
+
+    Limitado a 2 páginas (hasta 40 jugadores) para no disparar el
+    consumo de cuota — suficiente para cubrir la plantilla habitual.
+    """
+    players = []
+    page = 1
+    max_pages = 2
+
+    while page <= max_pages:
+
+        data, error = api_football_get(
+            "/players",
+            {"team": team_id, "season": season, "page": page},
+        )
+
+        if error or not data:
+            break
+
+        for entry in data.get("response", []):
+
+            player_info = entry.get("player", {})
+            stats_list = entry.get("statistics", [])
+
+            # Un jugador puede tener varias entradas de estadísticas
+            # (una por competición/equipo si fue traspasado). Nos
+            # quedamos con la que corresponde a esta liga.
+            stat = next(
+                (
+                    s for s in stats_list
+                    if s.get("league", {}).get("id") == league_id
+                ),
+                None,
+            )
+
+            if not stat:
+                continue
+
+            appearances = stat.get("games", {}).get("appearences") or 0
+
+            if appearances < MIN_APPEARANCES_FOR_PLAYER_STATS:
+                continue
+
+            shots_on = stat.get("shots", {}).get("on") or 0
+            fouls_committed = stat.get("fouls", {}).get("committed") or 0
+            fouls_drawn = stat.get("fouls", {}).get("drawn") or 0
+
+            players.append({
+                "name": player_info.get("name"),
+                "photo": player_info.get("photo"),
+                "position": stat.get("games", {}).get("position"),
+                "appearances": appearances,
+                "shots_on_per_game": shots_on / appearances,
+                "fouls_committed_per_game": fouls_committed / appearances,
+                "fouls_drawn_per_game": fouls_drawn / appearances,
+            })
+
+        paging = data.get("paging", {})
+        if page >= paging.get("total", 1):
+            break
+
+        page += 1
+
+    return players, None
+
+
+def build_player_predictions(
+    home_team_name, away_team_name,
+    home_team_id, away_team_id,
+    league_id, season,
+):
+    """
+    Devuelve un dict con los rankings de jugadores para los 3
+    mercados: tiros a puerta, faltas cometidas y faltas recibidas,
+    cada uno con el equipo de procedencia de cada jugador.
+    """
+    home_players, home_error = get_team_players_stats(
+        home_team_id, league_id, season
+    ) if home_team_id else ([], "Equipo local no encontrado en API-Football")
+
+    away_players, away_error = get_team_players_stats(
+        away_team_id, league_id, season
+    ) if away_team_id else ([], "Equipo visitante no encontrado en API-Football")
+
+    for p in home_players:
+        p["team"] = home_team_name
+    for p in away_players:
+        p["team"] = away_team_name
+
+    all_players = home_players + away_players
+
+    def top(metric, n=5):
+        return sorted(
+            all_players, key=lambda p: p[metric], reverse=True
+        )[:n]
+
+    return {
+        "shots_on": top("shots_on_per_game"),
+        "fouls_committed": top("fouls_committed_per_game"),
+        "fouls_drawn": top("fouls_drawn_per_game"),
+        "errors": [e for e in [home_error, away_error] if e],
+        "sample_size": len(all_players),
+    }
+
+
 HISTORY_WINDOW_YEARS = 2
 
 # Cada mercado define:
@@ -532,6 +769,135 @@ def load_multimarket_data(competition="PD"):
     except Exception as e:
         return pd.DataFrame(), str(e), []
 
+
+def render_player_predictions_section(home_name: str, away_name: str, competition_code: str):
+    """
+    Sección opt-in (bajo demanda) dentro de cada partido: qué
+    jugador de los dos equipos tiene más tiros a puerta por partido
+    de media, y qué jugador comete/recibe más faltas — usando
+    API-Football, ya que la fuente principal de esta app no tiene
+    datos por jugador.
+    """
+    st.markdown("**👤 Pronóstico de jugadores** (API-Football)")
+
+    if competition_code not in API_FOOTBALL_LEAGUE_MAP:
+        st.caption(
+            "Esta competición no está mapeada a API-Football "
+            "todavía, así que no hay pronóstico de jugador "
+            "disponible aquí."
+        )
+        return
+
+    if not get_api_football_key():
+        st.caption(
+            "⚠️ Falta la clave `API_FOOTBALL_KEY` en `st.secrets` "
+            "para poder generar pronósticos de jugador."
+        )
+        return
+
+    league_id, league_display = API_FOOTBALL_LEAGUE_MAP[competition_code]
+
+    col_season, col_button = st.columns([1, 1])
+
+    with col_season:
+        season = st.selectbox(
+            "Temporada de referencia",
+            API_FOOTBALL_FREE_SEASONS,
+            key=f"player_season_{home_name}_{away_name}",
+            help=(
+                "El plan gratuito de API-Football no da la "
+                "temporada en curso para las ligas grandes, solo "
+                "temporadas ya completadas."
+            ),
+        )
+
+    used_calls = st.session_state.get("api_football_call_count", 0)
+
+    with col_button:
+        st.caption(f"Peticiones API-Football usadas: {used_calls}")
+        run = st.button(
+            "▶️ Generar pronóstico de jugadores",
+            key=f"player_btn_{home_name}_{away_name}",
+        )
+
+    if not run:
+        st.caption(
+            "No se generan automáticamente para no gastar cuota "
+            "de API-Football sin pedirlo — pulsa el botón cuando "
+            "quieras verlo."
+        )
+        return
+
+    with st.spinner("Consultando estadísticas de jugadores..."):
+
+        teams_by_name, teams_error = get_api_football_teams(league_id, season)
+
+        if teams_error:
+            st.error(f"No se pudo obtener la lista de equipos: {teams_error}")
+            return
+
+        home_id, home_score = resolve_api_football_team_id(home_name, teams_by_name)
+        away_id, away_score = resolve_api_football_team_id(away_name, teams_by_name)
+
+        result = build_player_predictions(
+            home_name, away_name, home_id, away_id, league_id, season
+        )
+
+    if result["errors"]:
+        for err in result["errors"]:
+            st.warning(f"⚠️ {err}")
+
+    if result["sample_size"] == 0:
+        st.info(
+            "No hay suficientes jugadores con mínimo "
+            f"{MIN_APPEARANCES_FOR_PLAYER_STATS} partidos jugados "
+            "en esta temporada para generar el pronóstico "
+            "(equipo no encontrado en API-Football o temporada sin "
+            "datos)."
+        )
+        return
+
+    def render_ranking(title, players, metric, unit_label):
+        st.markdown(f"##### {title}")
+        if not players:
+            st.caption("Sin datos suficientes.")
+            return
+        for i, p in enumerate(players[:3]):
+            medal = ["🥇", "🥈", "🥉"][i]
+            st.write(
+                f"{medal} **{p['name']}** ({p['team']}) — "
+                f"{p[metric]:.2f} {unit_label} · "
+                f"{p['appearances']} partidos jugados"
+            )
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        render_ranking(
+            "🎯 Más tiros a puerta",
+            result["shots_on"], "shots_on_per_game", "tiros/partido"
+        )
+
+    with col2:
+        render_ranking(
+            "🟧 Más faltas cometidas",
+            result["fouls_committed"], "fouls_committed_per_game", "faltas/partido"
+        )
+
+    with col3:
+        render_ranking(
+            "🟢 Más faltas recibidas",
+            result["fouls_drawn"], "fouls_drawn_per_game", "faltas/partido"
+        )
+
+    st.caption(
+        f"Basado en la temporada {season} de {league_display} "
+        f"(API-Football, plan gratuito) · "
+        f"jugadores con mínimo {MIN_APPEARANCES_FOR_PLAYER_STATS} "
+        f"partidos jugados."
+    )
+
+
 def main():
     st.title("⚽ ValueBet Pro")
 
@@ -673,6 +1039,9 @@ def main():
                       </div>
                     </div>
                     """)
+
+                st.divider()
+                render_player_predictions_section(h, a, codigo_liga)
 
     with tab_sim:
         st.caption("Cálculo de stake mediante Criterio de Kelly.")
